@@ -6,6 +6,18 @@ macro_rules! parse_input {
 }
 
 const MAX_SCANS: usize = 10;
+
+
+fn go_dir(dir: &RadarDir) -> Point {
+    match dir {
+	RadarDir::BL => Point {x:0,y:10000},
+	RadarDir::TL => Point {x:0,y:0},
+	RadarDir::BR => Point {x:10000, y:10000},
+	RadarDir::TR => Point {x:10000, y:0},
+    }
+}
+
+
     
 #[derive(Debug)]
 struct Point { 
@@ -19,6 +31,24 @@ impl fmt::Display for Point {
         Ok(())
     }
 }
+
+impl Point {
+    fn dist(p1: &Point, p2: &Point) -> f64 {
+	let dx = f64::from(p1.x - p2.x);
+	let dy = f64::from(p1.y - p2.y);
+	(dx * dx + dy * dy).sqrt()
+    }
+}
+
+
+#[derive(Debug, PartialEq)]
+enum MapLocation {
+    T, // tout en haut
+    H, // en haut
+    M, // millieu
+    B, // bas
+}
+
 
 #[derive(Debug)]
 enum RadarDir {
@@ -56,6 +86,23 @@ struct Drone {
     battery: i32,
     scans: Vec<i32>,
     radars: Option<Vec<RadarBlip>>,
+}
+
+impl Drone {
+    fn where_i_am(&self) -> MapLocation {
+	if self.pos.y < 2500 {
+           return MapLocation::T;
+	}
+	else if  self.pos.y < 5000 {
+            return MapLocation::H;
+	}
+	else if self.pos.y < 7500 {
+            return MapLocation::M;
+	}
+	else {
+            return MapLocation::B;
+	}
+    }
 }
 
 #[derive(Debug)]
@@ -122,6 +169,7 @@ fn main() {
     }
 
     // game loop
+    let mut cur_step = 0;
     loop {
         let mut input_line = String::new();
         io::stdin().read_line(&mut input_line).unwrap();
@@ -237,17 +285,36 @@ fn main() {
 		.unwrap()
 		.radars.as_mut().unwrap().push(RadarBlip {fish_id:creature_id, dir:radar_dir.unwrap()});
         }
+	
 	let input_board = InputlBoard {fish_details:hash_fish.clone(), my_scans, opp_scans, my_drones, opp_drones, my_score:my_score, opp_score:foe_score};
 	eprintln!("{:?}", input_board);
-	
-        for id_d in 0..my_drone_count as usize {
 
+	for (idx, d) in input_board.my_drones.iter().enumerate() {
+	    let mut light = false;
 	    
-            // Write an action using println!("message...");
-            // To debug: eprintln!("Debug message...");
-	    let ac = Action::MOVE(Point {x:54, y:44}, true);
+	    let mut target = Point {x:d.pos.x, y:500};
 	    
-            println!("WAIT 1"); // MOVE <x> <y> <light (1|0)> | WAIT <light (1|0)>
-        }
+	    if d.scans.len() < 5 {
+		let loc = d.where_i_am();
+		if d.battery >= 5 && loc != MapLocation::T && (cur_step + idx) % 3 == 0 {
+                    light = true;
+		}
+		
+		for rb in d.radars.as_ref().unwrap() {
+		    if let Some(_) = input_board.my_scans.iter().find(|e| e == &&rb.fish_id) {
+			continue;
+		    }
+		    if let Some(_) = d.scans.iter().find(|e| e == &&rb.fish_id) {
+			continue;
+		    }
+		    target = go_dir(&rb.dir);
+		}
+
+	    }
+	    let ac = Action::MOVE(target, light);
+	    println!("{}", ac);
+	}
+
+	cur_step += 1;
     }
 }
