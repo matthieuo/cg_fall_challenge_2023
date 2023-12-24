@@ -24,7 +24,7 @@ fn go_dir(dir: &RadarDir) -> Point {
 
 
     
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Point { 
     x:i32,
     y:i32,
@@ -146,6 +146,8 @@ struct InputlBoard {
 
     my_drones: Vec<Drone>,
     opp_drones: Vec<Drone>,
+
+    visible_fishes: Vec<Fish>,
     
     
 }
@@ -187,22 +189,44 @@ struct GridApprox {
 struct GridSlice {
     p_min: Point,
     p_max: Point,
+    is_unique: bool,
 
+}
+
+impl fmt::Display for GridSlice {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+	if self.is_unique {
+	    assert_eq!(self.p_min, self.p_max);
+	    assert_eq!(self.p_min, self.center());
+	    assert_eq!(self.num_elems(), 1);
+		
+	    fmt.write_str(&format!("p: {} ** UNI **",self.p_min))?;
+	} else {
+	    fmt.write_str(&format!("p_min: {}, p_max: {} (center: {}) (sz {})",self.p_min,self.p_max, self.center(), self.num_elems()))?;
+	}
+        Ok(())
+    }
 }
 
 impl GridSlice {
     /// num elems for the gridified slice
     fn num_elems(&self) -> i32 {
-	let min_y = self.p_min.gridify().y as usize;
-	let min_x = self.p_min.gridify().x as usize;
-	let max_y = self.p_max.gridify().y as usize;
-	let max_x = self.p_max.gridify().x as usize;
-	((max_x - min_x)*(max_y - min_y)) as i32
+	if !self.is_unique {
+	    let min_y = self.p_min.gridify().y as usize;
+	    let min_x = self.p_min.gridify().x as usize;
+	    let max_y = self.p_max.gridify().y as usize;
+	    let max_x = self.p_max.gridify().x as usize;
+	    ((max_x - min_x)*(max_y - min_y)) as i32
+	} else {
+	    // 1 if element unique
+	    1
+	}
+		
     }
 
     fn from_tuple(pts: (Point, Point)) -> GridSlice {
 	let (p_min, p_max) = pts;
-	GridSlice {p_min, p_max}
+	GridSlice {p_min, p_max, is_unique:false}
 	
     }
 
@@ -222,73 +246,77 @@ impl GridSlice {
 	let min_y_n = cmp::max(min_y1, min_y2);
 	let max_y_n = cmp::min(max_y1, max_y2);
 
-	GridSlice {p_min: Point {x:min_x_n as i32, y:min_y_n as i32}, p_max: Point {x:max_x_n as i32, y:max_y_n as i32}}
+	GridSlice {p_min: Point {x:min_x_n as i32, y:min_y_n as i32}, p_max: Point {x:max_x_n as i32, y:max_y_n as i32}, is_unique:false}
 	
     }
 
     fn from_radar(d_pos: Point, r_dir: RadarDir) -> GridSlice {
 	match r_dir {
-	    RadarDir::BL => GridSlice {p_min: Point {x:0,y:d_pos.y}, p_max: Point {x:d_pos.x, y:BOARD_MAX_Y as i32}},
-	    RadarDir::BR => GridSlice {p_min: d_pos , p_max: Point {x:BOARD_MAX_X as i32,y:BOARD_MAX_Y as i32}},
-	    RadarDir::TL => GridSlice {p_min: Point {x:0,y:0}, p_max: d_pos},
-	    RadarDir::TR => GridSlice {p_min: Point {x:d_pos.x, y:0}, p_max: Point {x:BOARD_MAX_X as i32,y:d_pos.y}} ,
+	    RadarDir::BL => GridSlice {p_min: Point {x:0,y:d_pos.y}, p_max: Point {x:d_pos.x, y:BOARD_MAX_Y as i32}, is_unique:false},
+	    RadarDir::BR => GridSlice {p_min: d_pos , p_max: Point {x:BOARD_MAX_X as i32,y:BOARD_MAX_Y as i32}, is_unique:false},
+	    RadarDir::TL => GridSlice {p_min: Point {x:0,y:0}, p_max: d_pos, is_unique:false},
+	    RadarDir::TR => GridSlice {p_min: Point {x:d_pos.x, y:0}, p_max: Point {x:BOARD_MAX_X as i32,y:d_pos.y}, is_unique:false},
 	}
     }
 
     fn from_map_loc(ml: MapLocation) -> GridSlice {
 	GridSlice::from_tuple(MapLocation::to_min_max_pts(ml))
     }
+    fn from_unique_pt(pt: Point) -> GridSlice {
+	GridSlice {p_max:pt, p_min:pt, is_unique:true }
+    }
 
     fn center(&self) -> Point {
-	Point {x:self.p_min.x + (self.p_max.x - self.p_min.x)/2, y:self.p_min.y + (self.p_max.y - self.p_min.y)/2}
+	if !self.is_unique {
+	    Point {x:self.p_min.x + (self.p_max.x - self.p_min.x)/2, y:self.p_min.y + (self.p_max.y - self.p_min.y)/2}
+	} else {
+	    assert_eq!(self.p_min, self.p_max);
+	    self.p_min
+	}
     }
 }
 
 impl GridApprox {
-
     fn update_proba(&mut self, fish_id:i32, gs: &GridSlice) {
 	let min_y = gs.p_min.gridify().y as usize;
 	let min_x = gs.p_min.gridify().x as usize;
 	let max_y = gs.p_max.gridify().y as usize;
 	let max_x = gs.p_max.gridify().x as usize;
 	
-	for i in min_y..max_y {
-	    for j in &mut self.grid[i][min_x..max_x] {	
-		j.creatures_proba[fish_id as usize] = (1.0)/ gs.num_elems() as f32;
-	    }
-	}
+	if !gs.is_unique {
 
+	    
+	    for i in min_y..max_y {
+		for j in &mut self.grid[i][min_x..max_x] {	
+		    j.creatures_proba[fish_id as usize] = (1.0)/ gs.num_elems() as f32;
+		}
+	    }
+	} else {
+	    assert_eq!(min_y, max_y);
+	    assert_eq!(min_x, max_x);
+	    self.grid[min_y][min_x].creatures_proba[fish_id as usize] = 1.0
+	}
     }
     
     fn from_input_board(ib:&InputlBoard) -> GridApprox {
 	let mut out_g = GridApprox {grid: [[GridElem {creatures_proba:[0.0;MAX_CREATURES]} ; GRID_MAX_X];GRID_MAX_Y], grid_sliced:[None; MAX_CREATURES]};
-
-	/*for (f_id, fd) in ib.fish_details.iter() {
-	    	    out_g.update_proba(*f_id, &GridSlice::from_tuple(MapLocation::to_min_max_pts(fd.get_zone())));
-	
-	}*/
+	let mut tab_creat :[Option<GridSlice>; MAX_CREATURES] = [None; MAX_CREATURES];
 	
 	for d in ib.my_drones.iter().chain(ib.opp_drones.iter()) {
-	    let pg = d.pos.gridify();
-	    out_g.grid[pg.x as usize][pg.y as usize].creatures_proba[d.drone_id as usize] = 1.0;
+	    let gs = GridSlice::from_unique_pt(d.pos);
+	    tab_creat[d.drone_id as usize] = Some(gs); 
 	}
 
 	//update based on radar
-	let mut tab_creat :[Option<GridSlice>; MAX_CREATURES] = [None; MAX_CREATURES];
-	eprintln!("{:?}", tab_creat[15]);
+
 	
 	for d in ib.my_drones.iter() {
+	    //radar
 	    for r in d.radars.as_ref().unwrap().iter() {
 		let gs_r = GridSlice::from_radar(d.pos, r.dir);
 		let gs_f = GridSlice::from_map_loc(r.fish_detail.get_zone());
 		let inter = gs_r.intersec(gs_f);
 
-		if r.fish_id == 15 {
-		    //eprintln!("did = {}", d.drone_id);
-		    //eprintln!("{:?}", gs_r);
-		    //eprintln!("{:?}", gs_f);
-		    //eprintln!("{:?}", inter);
-		}
 		if let Some(gs_e) = &mut tab_creat[r.fish_id as usize] {
 		    *gs_e = gs_e.intersec(inter);
 		}
@@ -297,8 +325,18 @@ impl GridApprox {
 		}		
 	    }
 	}
+	for f in ib.visible_fishes.iter() {
+	    eprintln!("visi fish {}", f.fish_id);
+	    tab_creat[f.fish_id as usize] = Some(GridSlice::from_unique_pt(f.pos));
+	}
 
-	eprintln!("fin = {:?}", tab_creat);
+	//****** DEBUG
+	for (idx,i) in tab_creat.iter().enumerate() {
+	    if let Some(it) = i {
+		eprintln!("fid {} - {}", idx, it);
+	    }
+	}
+	
 	for (f_id, inte) in tab_creat.iter().enumerate() {
 	    if let Some(in_f) = inte {
 		out_g.update_proba(f_id as i32, in_f);
@@ -457,7 +495,7 @@ fn main() {
 		.radars.as_mut().unwrap().push(RadarBlip {fish_id:creature_id, dir:radar_dir.unwrap(),fish_detail: *hash_fish.get(&creature_id).unwrap()});
         }
 	
-	let input_board = InputlBoard {fish_details:hash_fish.clone(), my_scans, opp_scans, my_drones, opp_drones, my_score:my_score, opp_score:foe_score};
+	let input_board = InputlBoard {fish_details:hash_fish.clone(), my_scans, opp_scans, my_drones, opp_drones, my_score:my_score, opp_score:foe_score, visible_fishes};
 	let g_a = GridApprox::from_input_board(&input_board);
 	//eprintln!("{:?}", g_a);
 	
