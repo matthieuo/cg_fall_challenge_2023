@@ -1,4 +1,4 @@
-use std::{io, fmt, iter};
+use std::{io, fmt, cmp};
 use std::collections::{HashSet, VecDeque, HashMap};
 
 macro_rules! parse_input {
@@ -6,7 +6,12 @@ macro_rules! parse_input {
 }
 
 const MAX_SCANS: usize = 10;
+const MAX_CREATURES: usize = 22;
+const GRID_MAX_X: usize = 100;
+const GRID_MAX_Y: usize = 100;
 
+const BOARD_MAX_X: usize = 10000;
+const BOARD_MAX_Y: usize = 10000;
 
 fn go_dir(dir: &RadarDir) -> Point {
     match dir {
@@ -19,7 +24,7 @@ fn go_dir(dir: &RadarDir) -> Point {
 
 
     
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct Point { 
     x:i32,
     y:i32,
@@ -38,19 +43,34 @@ impl Point {
 	let dy = f64::from(p1.y - p2.y);
 	(dx * dx + dy * dy).sqrt()
     }
+    fn gridify(&self) -> Point {
+	Point {x:(self.x as f32/GRID_MAX_X as f32).round() as i32, y:(self.y as f32/GRID_MAX_Y as f32).round() as i32}
+    }
 }
 
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum MapLocation {
     T, // tout en haut
     H, // en haut
     M, // millieu
     B, // bas
+    Mo, // monster
 }
 
+impl MapLocation {
+    fn to_min_max_pts(ml: MapLocation) -> (Point, Point) {
+	match ml {
+	    MapLocation::T => (Point {x:0,y:0}, Point {x:BOARD_MAX_X as i32,y:2500}),
+	    MapLocation::H => (Point {x:0,y:2500}, Point {x:BOARD_MAX_X as i32,y:5000}),
+	    MapLocation::M => (Point {x:0,y:5000}, Point {x:BOARD_MAX_X as i32,y:7500}),
+	    MapLocation::B => (Point {x:0,y:7500}, Point {x:BOARD_MAX_X as i32,y:10000}),
+	    MapLocation::Mo => (Point {x:0,y:2500}, Point {x:BOARD_MAX_X as i32,y:10000}),
+	}
+    }
+}
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum RadarDir {
     TL, // : la créature est en haut à gauche du drone.
     TR, // : la créature est en haut à droite du drone.
@@ -62,6 +82,16 @@ enum RadarDir {
 struct FishDetail {
     color: i32,
     fish_type: i32,
+}
+impl FishDetail {
+    fn get_zone(&self) -> MapLocation {
+	match self.fish_type {
+	    0 => MapLocation::H,
+	    1 => MapLocation::M,
+	    2 => MapLocation::B,
+	    _ => MapLocation::Mo,
+	}
+    }
 }
 
 #[derive(Debug)]
@@ -75,6 +105,7 @@ struct Fish {
 #[derive(Debug)]
 struct RadarBlip {
     fish_id: i32,
+    fish_detail: FishDetail,
     dir: RadarDir,
 }
 
@@ -138,7 +169,146 @@ impl fmt::Display for Action {
 
 
 
+#[derive(Debug, Copy, Clone)]
+struct GridElem {
+    creatures_proba :[f32; MAX_CREATURES],
 
+    
+}
+#[derive(Debug)]
+struct GridApprox {
+    grid: [[GridElem; GRID_MAX_X]; GRID_MAX_Y],
+    grid_sliced: [Option<GridSlice>; MAX_CREATURES],
+    
+}
+
+#[derive(Debug, Clone, Copy)]
+/// points are note in the gridified space !!
+struct GridSlice {
+    p_min: Point,
+    p_max: Point,
+
+}
+
+impl GridSlice {
+    /// num elems for the gridified slice
+    fn num_elems(&self) -> i32 {
+	let min_y = self.p_min.gridify().y as usize;
+	let min_x = self.p_min.gridify().x as usize;
+	let max_y = self.p_max.gridify().y as usize;
+	let max_x = self.p_max.gridify().x as usize;
+	((max_x - min_x)*(max_y - min_y)) as i32
+    }
+
+    fn from_tuple(pts: (Point, Point)) -> GridSlice {
+	let (p_min, p_max) = pts;
+	GridSlice {p_min, p_max}
+	
+    }
+
+    fn intersec(&self, gs:GridSlice) -> GridSlice {
+	let min_y1 = self.p_min.y as usize;
+	let min_x1 = self.p_min.x as usize;
+	let max_y1 = self.p_max.y as usize;
+	let max_x1 = self.p_max.x as usize;
+
+	let min_y2 = gs.p_min.y as usize;
+	let min_x2 = gs.p_min.x as usize;
+	let max_y2 = gs.p_max.y as usize;
+	let max_x2 = gs.p_max.x as usize;
+
+	let min_x_n = cmp::max(min_x1, min_x2);
+	let max_x_n = cmp::min(max_x1, max_x2);
+	let min_y_n = cmp::max(min_y1, min_y2);
+	let max_y_n = cmp::min(max_y1, max_y2);
+
+	GridSlice {p_min: Point {x:min_x_n as i32, y:min_y_n as i32}, p_max: Point {x:max_x_n as i32, y:max_y_n as i32}}
+	
+    }
+
+    fn from_radar(d_pos: Point, r_dir: RadarDir) -> GridSlice {
+	match r_dir {
+	    RadarDir::BL => GridSlice {p_min: Point {x:0,y:d_pos.y}, p_max: Point {x:d_pos.x, y:BOARD_MAX_Y as i32}},
+	    RadarDir::BR => GridSlice {p_min: d_pos , p_max: Point {x:BOARD_MAX_X as i32,y:BOARD_MAX_Y as i32}},
+	    RadarDir::TL => GridSlice {p_min: Point {x:0,y:0}, p_max: d_pos},
+	    RadarDir::TR => GridSlice {p_min: Point {x:d_pos.x, y:0}, p_max: Point {x:BOARD_MAX_X as i32,y:d_pos.y}} ,
+	}
+    }
+
+    fn from_map_loc(ml: MapLocation) -> GridSlice {
+	GridSlice::from_tuple(MapLocation::to_min_max_pts(ml))
+    }
+
+    fn center(&self) -> Point {
+	Point {x:self.p_min.x + (self.p_max.x - self.p_min.x)/2, y:self.p_min.y + (self.p_max.y - self.p_min.y)/2}
+    }
+}
+
+impl GridApprox {
+
+    fn update_proba(&mut self, fish_id:i32, gs: &GridSlice) {
+	let min_y = gs.p_min.gridify().y as usize;
+	let min_x = gs.p_min.gridify().x as usize;
+	let max_y = gs.p_max.gridify().y as usize;
+	let max_x = gs.p_max.gridify().x as usize;
+	
+	for i in min_y..max_y {
+	    for j in &mut self.grid[i][min_x..max_x] {	
+		j.creatures_proba[fish_id as usize] = (1.0)/ gs.num_elems() as f32;
+	    }
+	}
+
+    }
+    
+    fn from_input_board(ib:&InputlBoard) -> GridApprox {
+	let mut out_g = GridApprox {grid: [[GridElem {creatures_proba:[0.0;MAX_CREATURES]} ; GRID_MAX_X];GRID_MAX_Y], grid_sliced:[None; MAX_CREATURES]};
+
+	/*for (f_id, fd) in ib.fish_details.iter() {
+	    	    out_g.update_proba(*f_id, &GridSlice::from_tuple(MapLocation::to_min_max_pts(fd.get_zone())));
+	
+	}*/
+	
+	for d in ib.my_drones.iter().chain(ib.opp_drones.iter()) {
+	    let pg = d.pos.gridify();
+	    out_g.grid[pg.x as usize][pg.y as usize].creatures_proba[d.drone_id as usize] = 1.0;
+	}
+
+	//update based on radar
+	let mut tab_creat :[Option<GridSlice>; MAX_CREATURES] = [None; MAX_CREATURES];
+	eprintln!("{:?}", tab_creat[15]);
+	
+	for d in ib.my_drones.iter() {
+	    for r in d.radars.as_ref().unwrap().iter() {
+		let gs_r = GridSlice::from_radar(d.pos, r.dir);
+		let gs_f = GridSlice::from_map_loc(r.fish_detail.get_zone());
+		let inter = gs_r.intersec(gs_f);
+
+		if r.fish_id == 15 {
+		    //eprintln!("did = {}", d.drone_id);
+		    //eprintln!("{:?}", gs_r);
+		    //eprintln!("{:?}", gs_f);
+		    //eprintln!("{:?}", inter);
+		}
+		if let Some(gs_e) = &mut tab_creat[r.fish_id as usize] {
+		    *gs_e = gs_e.intersec(inter);
+		}
+		else {
+		  tab_creat[r.fish_id as usize] = Some(inter);  
+		}		
+	    }
+	}
+
+	eprintln!("fin = {:?}", tab_creat);
+	for (f_id, inte) in tab_creat.iter().enumerate() {
+	    if let Some(in_f) = inte {
+		out_g.update_proba(f_id as i32, in_f);
+	    }
+	}
+	out_g.grid_sliced = tab_creat;
+	
+	out_g
+    }
+}
 
 
 
@@ -165,6 +335,7 @@ fn main() {
         let creature_id = parse_input!(inputs[0], i32);
         let color = parse_input!(inputs[1], i32);
         let fish_type = parse_input!(inputs[2], i32);
+	assert!(creature_id <= 21);
 	hash_fish.insert(creature_id, FishDetail {color, fish_type});
     }
 
@@ -283,11 +454,13 @@ fn main() {
 	    my_drones.iter_mut()
 		.find(|e| e.drone_id == drone_id)
 		.unwrap()
-		.radars.as_mut().unwrap().push(RadarBlip {fish_id:creature_id, dir:radar_dir.unwrap()});
+		.radars.as_mut().unwrap().push(RadarBlip {fish_id:creature_id, dir:radar_dir.unwrap(),fish_detail: *hash_fish.get(&creature_id).unwrap()});
         }
 	
 	let input_board = InputlBoard {fish_details:hash_fish.clone(), my_scans, opp_scans, my_drones, opp_drones, my_score:my_score, opp_score:foe_score};
-	eprintln!("{:?}", input_board);
+	let g_a = GridApprox::from_input_board(&input_board);
+	//eprintln!("{:?}", g_a);
+	
 
 	for (idx, d) in input_board.my_drones.iter().enumerate() {
 	    let mut light = false;
