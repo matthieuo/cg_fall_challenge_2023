@@ -11,6 +11,8 @@ const MAX_CREATURES: usize = 22;
 const GRID_MAX_X: usize = 100;
 const GRID_MAX_Y: usize = 100;
 
+const D_MONSTER_EMER: f64 = 900.0;
+const MONSTER_SPEED_ANGRY: i32 = 540;
 const D_MAX_DRONE: i32 = 600;
 const D_GRID_MAX_DRONE: i32 = D_MAX_DRONE/GRID_MAX_X as i32;
 
@@ -20,14 +22,14 @@ const GRID_LIGHT_STD: i32 = LIGHT_STD / GRID_MAX_X as i32;
 const BOARD_MAX_X: usize = 10000;
 const BOARD_MAX_Y: usize = 10000;
 
-fn go_dir(dir: &RadarDir) -> Point {
+/*fn go_dir(dir: &RadarDir) -> Point {
     match dir {
 	RadarDir::BL => Point {x:0,y:10000},
 	RadarDir::TL => Point {x:0,y:0},
 	RadarDir::BR => Point {x:10000, y:10000},
 	RadarDir::TR => Point {x:10000, y:0},
     }
-}
+}*/
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct GridPoint { 
@@ -73,6 +75,60 @@ impl Point {
     }
     fn gridify(&self) -> GridPoint {
 	GridPoint {x:(self.x as f32/GRID_MAX_X as f32).floor() as i32, y:(self.y as f32/GRID_MAX_Y as f32).floor() as i32}
+    }
+
+    fn div(&self, d_f:f64) -> Point{
+	Point {x:(self.x as f64/d_f ) as i32, y:(self.y as f64 /d_f) as i32}
+    }
+
+    fn add(a: Point, b: Point) -> Point {
+	Point { x: a.x + b.x, y: a.y + b.y }
+    }
+
+    fn sub(a: Point, b: Point) -> Point {
+	Point { x: a.x - b.x, y: a.y - b.y }
+    }
+
+    fn dot(a: Point, b: Point) -> f64 {
+	f64::from(a.x * b.x + a.y * b.y)
+    }
+
+    fn hypot2(a: Point, b: Point) -> f64 {
+	Point::dot(Point::sub(a, b), Point::sub(a, b))
+    }
+
+    // Function for projecting some vector a onto b
+    fn proj(a: Point, b: Point) -> Point {
+	let k = Point::dot(a, b) / Point::dot(b, b);
+	Point { x: (k * b.x as f64) as i32, y: (k * b.y as f64) as i32 }
+    }
+
+    fn distance_segment_to_point(a: Point, b: Point, c: Point) -> f64 {
+	// Compute vectors AC and AB
+	let ac = Point::sub(c, a);
+	let ab = Point::sub(b, a);
+
+	// Get point D by taking the projection of AC onto AB then adding the offset of A
+	let d = Point::add(Point::proj(ac, ab), a);
+	
+	let ad = Point::sub(d, a);
+	// D might not be on AB so calculate k of D down AB (aka solve AD = k * AB)
+	// We can use either component, but choose larger value to reduce the chance of dividing by zero
+	let k = if ab.x.abs() > ab.y.abs() { ad.x as f64 / ab.x as f64 } else { ad.y as f64/ ab.y as f64 };
+
+	// Check if D is off either end of the line segment
+	if k <= 0.0 {
+            return (Point::hypot2(c, a)).sqrt();
+	} else if k >= 1.0 {
+            return (Point::hypot2(c, b)).sqrt();
+	}
+
+	(Point::hypot2(c, d)).sqrt()
+    }
+
+    /// coord [AB], center circle, radius
+    fn is_circle_line_collision(a: Point, b:Point, cc: Point, cr:i32) -> bool {
+	Point::distance_segment_to_point(a,b,cc) as i32 <= cr
     }
 }
 
@@ -126,6 +182,7 @@ impl FishDetail {
 struct Fish {
     fish_id: i32,
     pos: Point,
+    pos_prev: Option<Point>, //for the monster, need the previous
     speed: Point,
     detail: FishDetail,
 }
@@ -164,7 +221,7 @@ impl Drone {
     }
 }
 
-
+#[derive(Debug, Clone)]
 struct Board {
     my_score: i32,
     opp_score: i32,
@@ -176,23 +233,198 @@ struct Board {
     opp_drones: Vec<Drone>,
 
     visible_fishes: Vec<Fish>,
+
+    grid_sliced: [Option<GridSlice>; MAX_CREATURES],
 }
 
 impl Board {
     fn from_input_board(ib: &InputlBoard) -> Board {
-	Board {my_score:ib.my_score, opp_score:ib.opp_score, my_scans:ib.my_scans.clone(), opp_scans: ib.opp_scans.clone(), my_drones:ib.my_drones.clone(), opp_drones:ib.opp_drones.clone(), visible_fishes:ib.visible_fishes.clone()}
+	let mut tab_creat :[Option<GridSlice>; MAX_CREATURES] = [None; MAX_CREATURES];
+	
+	for d in ib.my_drones.iter().chain(ib.opp_drones.iter()) {
+	    let gs = GridSlice::from_unique_pt(d.pos);
+	    tab_creat[d.drone_id as usize] = Some(gs); 
+	}
+
+	//update based on radar
+
+	
+	for d in ib.my_drones.iter() {
+	    //radar
+	    for r in d.radars.as_ref().unwrap().iter() {
+		let gs_r = GridSlice::from_radar(d.pos, r.dir);
+		let gs_f = GridSlice::from_map_loc(r.fish_detail.get_zone());
+		let inter = gs_r.intersec(gs_f);
+
+		if let Some(gs_e) = &mut tab_creat[r.fish_id as usize] {
+		    *gs_e = gs_e.intersec(inter);
+		}
+		else {
+		  tab_creat[r.fish_id as usize] = Some(inter);  
+		}		
+	    }
+	}
+	
+	Board {my_score:ib.my_score, opp_score:ib.opp_score, my_scans:ib.my_scans.clone(), opp_scans: ib.opp_scans.clone(), my_drones:ib.my_drones.clone(), opp_drones:ib.opp_drones.clone(), visible_fishes:ib.visible_fishes.clone(), grid_sliced:tab_creat}
+    }
+
+    ///update monsters coordinate for next step
+    fn update_monster(&self, fish: &mut Fish) {
+	assert_eq!(fish.detail.fish_type, -1);
+
+	eprintln!(" init p :{}, v {} id {}",fish.pos, fish.speed, fish.fish_id);
+	fish.pos_prev = Some(fish.pos);
+	//find minimum drone
+	let (closest_dis, closest_dr) = self.my_drones.iter()
+	    .chain(self.opp_drones.iter())
+	    .map(|d| (Point::dist(&d.pos, &fish.pos), d))
+	    .min_by(|x0,x1| x0.0.partial_cmp(&x1.0).unwrap())
+	    .unwrap();
+
+	eprintln!(" closest dist :{}, cd {:?}",closest_dis, closest_dr);
+	
+	let d_light = LIGHT_STD; //TODO change if light on
+	if (closest_dis as i32) <= d_light {
+	    //go to the direction of the drone
+
+	    let v_abs = Point {x:closest_dr.pos.x - fish.pos.x, y: closest_dr.pos.y - fish.pos.y};
+	    let (dx_n, dy_n) = ((MONSTER_SPEED_ANGRY as f64/closest_dis), ( MONSTER_SPEED_ANGRY as f64/closest_dis));
+	    let p_new = Point {x:((v_abs.x as f64)*dx_n) as i32,y:((v_abs.y as f64)*dy_n) as i32};
+	    fish.speed = p_new;
+	    //eprintln!("pt ne {} old: {} grid {}, idx{} {} {}", p_new, p, dist, idx, dx_n, dy_n);
+	    eprintln!("fspeed :{}", fish.speed);
+	} 
+	// only update pos (spped already updated before)
+	fish.pos.x += fish.speed.x;
+	fish.pos.y += fish.speed.y;
+
+	fish.pos.x = cmp::min(cmp::max(0, fish.pos.x), (BOARD_MAX_X -1) as i32);
+	fish.pos.y = cmp::min(cmp::max(2500, fish.pos.y), (BOARD_MAX_Y -1) as i32);
+
+	eprintln!(" predicted p :{}, v {} id {}",fish.pos, fish.speed, fish.fish_id);
+	
+    }
+    
+    fn next_board(&self, acs: &Vec<Action>) -> Board {
+	//focus on monster for now
+
+	let mut out_b = self.clone();
+
+	for f in out_b.visible_fishes.iter_mut() {
+	    if f.detail.fish_type == -1 {
+		self.update_monster(f);
+	    }
+	}
+	
+	out_b	
     }
 
 
-    
-  /*  fn next_board(&self, acs: &Vec<Action>) -> Board {
-	//focus on monster for now
+    fn monster_collision(&self, ps: Point, pe:Point, pe_inter: Point) -> bool {
+	let mut coll_found = false;
+	for f in self.visible_fishes.iter() {
+	    if f.detail.fish_type == -1 {
+		//check collision
 
-	let up_vf = self.visible_fishes.clone();
+		
+		if Point::dist(&pe,&f.pos) <= D_MONSTER_EMER || Point::dist(&pe_inter,&f.pos) <= D_MONSTER_EMER{
+		    //eprintln!("COL1 {} {}",ps, pe);
+		    coll_found = true;
+		}
+		if let Some(prev_p) = f.pos_prev {
+		    //if Point::is_circle_line_collision(ps, pe, prev_p, 500) {
+			if Point::dist(&pe,&prev_p) <= D_MONSTER_EMER || Point::dist(&pe_inter,&prev_p) <= D_MONSTER_EMER{
+			//eprintln!("COL2 {} {}",ps, pe);
+			coll_found = true;
+		    }
+		}
+	    }
+	}
+	coll_found
+    }
+    fn get_successor(&self, p:GridPoint) -> [Option<GridPoint>;8] {
+	let mut ret_tab = [None;8];
+	let mut idx = 0; // bug enumerae
+
+	for (dx_a,dy_a) in iproduct!([-1,0,1], [-1,0,1]) {
+	    if dx_a == 0 && dy_a == 0 {
+		continue;
+	    }
+	    let dist = GridPoint::dist(&GridPoint {x:0,y:0} ,&GridPoint {x:dx_a,y:dy_a});
+	    let (dx_n, dy_n) = ((D_GRID_MAX_DRONE as f64/dist), (D_GRID_MAX_DRONE as f64/dist));
+	    let d_n_inter = ((D_GRID_MAX_DRONE as f64)/(2.0/3.0))/dist;
+	    let p_new = GridPoint {x:p.x + ((dx_a as f64)*dx_n) as i32,y:p.y + ((dy_a as f64)*dy_n) as i32};
+	    let p_new_intermediate = GridPoint {x:p.x + ((dx_a as f64)*(d_n_inter)) as i32,y:p.y + ((dy_a as f64)*(d_n_inter)) as i32}; //to check intermediate col
+
+	    
+	    //eprintln!("pt ne {} inter {} dist: {}  idx{} {} {}", p_new, p_new_intermediate, dist, idx, dx_n, dy_n);
+	    //eprintln!("deg  ne {} inter {} orig {}", p_new.de_gridify(), p_new_intermediate.de_gridify(),p.de_gridify()) ;
+
+	    
+	    if p_new.x < 0 || p_new.x >= GRID_MAX_X as i32|| p_new.y < 0 || p_new.y >= GRID_MAX_X as i32{
+		continue;
+	    }
+
+	    if self.monster_collision(p.de_gridify(), p_new.de_gridify(),p_new_intermediate.de_gridify()) {
+		continue;
+	    }
+	    ret_tab[idx] = Some(p_new);
+	    idx +=1;
+	}
+
+	if ret_tab.iter().filter(|v| v.is_some()).count() == 0 {
+	    // only none
+	    eprintln!("None onl s {} sdg {}", p, p.de_gridify());
+	    for (dx_a,dy_a) in iproduct!([-1,0,1], [-1,0,1]) {
+		if dx_a == 0 && dy_a == 0 {
+		    continue;
+		}
+		let dist = GridPoint::dist(&GridPoint {x:0,y:0} ,&GridPoint {x:dx_a,y:dy_a});
+		let (dx_n, dy_n) = ((D_GRID_MAX_DRONE as f64/dist), (D_GRID_MAX_DRONE as f64/dist));
+		let d_n_inter = ((D_GRID_MAX_DRONE as f64)/2.0)/dist;
+		let p_new = GridPoint {x:p.x + ((dx_a as f64)*dx_n) as i32,y:p.y + ((dy_a as f64)*dy_n) as i32};
+		let p_new_intermediate = GridPoint {x:p.x + ((dx_a as f64)*(d_n_inter)) as i32,y:p.y + ((dy_a as f64)*(d_n_inter)) as i32}; //to check intermediate col
+		//eprintln!("pt ne {} inter {} dist: {}  idx{} {} {}", p_new, p_new_intermediate, dist, idx, dx_n, dy_n);
+		//eprintln!("deg  ne {} inter {} orig {}", p_new.de_gridify(), p_new_intermediate.de_gridify(),p.de_gridify()) ;
+	    }
+	}
+	ret_tab
+    }
+
+   fn dfs(&self, si:Point, ei:Point) -> Option<Vec<Point>> {
+	//use a dfs for this
+       let s = si.gridify();
+       let e = ei.gridify();
+       
+       eprintln!("dfs start {} end {} sg{} eg{}", si, ei, s, e);
+       let mut visited :HashSet<GridPoint> = HashSet::new();
+	visited.insert(s);
+	
+	let mut queue: VecDeque<(GridPoint, Vec<Point>)> = VecDeque::new();
+	queue.push_back((s, vec![s.de_gridify()]));
 
 	
-	
-    }*/
+	while !queue.is_empty() {
+	    let (cur_pos, path) = queue.pop_front().unwrap();
+
+
+	    for nei_try in self.get_successor(cur_pos) {
+		if let Some(nei) = nei_try {
+		    //eprintln!("cur_pos {} nei {} {} {}",cur_pos, nei, cur_pos.de_gridify(), nei.de_gridify());
+		    if !visited.contains(&nei) {
+			let new_vec:Vec<Point> =  path.iter().copied().chain(iter::once(nei.de_gridify())).collect();
+			queue.push_back((nei, new_vec.clone()));
+			visited.insert(nei);
+			//if Point::dist(&nei,&e) < 400.0 {
+			if GridPoint::dist(&e, &nei) < GRID_LIGHT_STD as f64 {
+			    return  Some(new_vec.clone());
+			}
+		    }
+		}
+	    }
+	}
+	None
+    }
 }
 
 #[derive(Debug)]
@@ -236,13 +468,13 @@ struct GridElem {
 
     
 }
-#[derive(Debug)]
+/*#[derive(Debug)]
 struct GridApprox {
     grid: [[GridElem; GRID_MAX_X]; GRID_MAX_Y],
     grid_sliced: [Option<GridSlice>; MAX_CREATURES],
     grid_path: [[bool; GRID_MAX_X]; GRID_MAX_Y],
     
-}
+}*/
 
 #[derive(Debug, Clone, Copy)]
 /// points are note in the gridified space !!
@@ -336,156 +568,7 @@ impl GridSlice {
     }
 }
 
-impl GridApprox {
-    /*fn update_proba(&mut self, fish_id:i32, gs: &GridSlice) {
-	let min_y = gs.p_min.gridify().y as usize;
-	let min_x = gs.p_min.gridify().x as usize;
-	let max_y = gs.p_max.gridify().y as usize;
-	let max_x = gs.p_max.gridify().x as usize;
-	
-	if !gs.is_unique {
 
-	    
-	    for i in min_y..max_y {
-		for j in &mut self.grid[i][min_x..max_x] {	
-		    j.creatures_proba[fish_id as usize] = (1.0)/ gs.num_elems() as f32;
-		}
-	    }
-	} else {
-	    assert_eq!(min_y, max_y);
-	    assert_eq!(min_x, max_x);
-	    self.grid[min_y][min_x].creatures_proba[fish_id as usize] = 1.0
-	}
-    }*/
-    
-    fn from_input_board(ib:&Board) -> GridApprox {
-	let mut out_g = GridApprox {grid: [[GridElem {creatures_proba:[0.0;MAX_CREATURES]} ; GRID_MAX_X];GRID_MAX_Y], grid_sliced:[None; MAX_CREATURES], grid_path:[[true ; GRID_MAX_X];GRID_MAX_Y]};
-	let mut tab_creat :[Option<GridSlice>; MAX_CREATURES] = [None; MAX_CREATURES];
-	
-	for d in ib.my_drones.iter().chain(ib.opp_drones.iter()) {
-	    let gs = GridSlice::from_unique_pt(d.pos);
-	    tab_creat[d.drone_id as usize] = Some(gs); 
-	}
-
-	//update based on radar
-
-	
-	for d in ib.my_drones.iter() {
-	    //radar
-	    for r in d.radars.as_ref().unwrap().iter() {
-		let gs_r = GridSlice::from_radar(d.pos, r.dir);
-		let gs_f = GridSlice::from_map_loc(r.fish_detail.get_zone());
-		let inter = gs_r.intersec(gs_f);
-
-		if let Some(gs_e) = &mut tab_creat[r.fish_id as usize] {
-		    *gs_e = gs_e.intersec(inter);
-		}
-		else {
-		  tab_creat[r.fish_id as usize] = Some(inter);  
-		}		
-	    }
-	}
-	for f in ib.visible_fishes.iter() {
-	    eprintln!("visi fish {}", f.fish_id);
-	    tab_creat[f.fish_id as usize] = Some(GridSlice::from_unique_pt(f.pos));
-	    if f.detail.fish_type == -1 {
-		//monster (circle equation)
-		for y in 0..GRID_MAX_Y {
-		    for x in 0..GRID_MAX_X {
-			if (x as i32-f.pos.gridify().x)*(x as i32 -f.pos.gridify().x) + (y as i32  -f.pos.gridify().y)*(y as i32-f.pos.gridify().y) <= 9*9 {
-			    out_g.grid_path[y][x] = false; //we dont want to use these cells
-			    eprintln!("monster cells : x{} y{}", x, y);
-			}
-		    }
-		}
-	    }
-	}
-
-	//****** DEBUG
-	for (idx,i) in tab_creat.iter().enumerate() {
-	    if let Some(it) = i {
-		//eprintln!("fid {} - {}", idx, it);
-	    }
-	}
-	
-	/*for (f_id, inte) in tab_creat.iter().enumerate() {
-	    if let Some(in_f) = inte {
-		out_g.update_proba(f_id as i32, in_f);
-	    }
-	}*/
-	out_g.grid_sliced = tab_creat;
-	
-	out_g
-    }
-
-    fn get_successor(&self, p:GridPoint) -> [Option<GridPoint>;8] {
-	let mut ret_tab = [None;8];
-	let mut idx = 0; // bug enumerae
-
-	for (dx_a,dy_a) in iproduct!([-1,0,1], [-1,0,1]) {
-	    if dx_a == 0 && dy_a == 0 {
-		continue;
-	    }
-	    let dist = GridPoint::dist(&GridPoint {x:0,y:0} ,&GridPoint {x:dx_a,y:dy_a});
-	    let (dx_n, dy_n) = ((D_GRID_MAX_DRONE as f64/dist), (D_GRID_MAX_DRONE as f64/dist));
-	    let p_new = GridPoint {x:p.x + ((dx_a as f64)*dx_n) as i32,y:p.y + ((dy_a as f64)*dy_n) as i32};
-	    //eprintln!("pt ne {} old: {} grid {}, idx{} {} {}", p_new, p, dist, idx, dx_n, dy_n);
-	    if p_new.x < 0 || p_new.x >= GRID_MAX_X as i32|| p_new.y < 0 || p_new.y >= GRID_MAX_X as i32{
-		continue;
-	    }
-	    //if p_new == p {
-	//	continue;
-	  //  }
-
-	    //if p_new.y > 100 || p_new.x > 100 {
-	//	eprintln!("pt** ne {} old: {} , idx{}", p_new, p, idx);
-	  //  }
-	    if self.grid_path[p_new.y as usize][p_new.x as usize] {
-		//ok we can go
-		ret_tab[idx] = Some(p_new);
-	    }
-	    idx +=1;
-	}
-
-
-	ret_tab
-    }
-
-   fn dfs(&self, si:Point, ei:Point) -> Option<Vec<Point>> {
-	//use a dfs for this
-       let s = si.gridify();
-       let e = ei.gridify();
-       
-       eprintln!("dfs {} {} {} {}", si, ei, s, e);
-	let mut visited :HashSet<GridPoint> = HashSet::new();
-	visited.insert(s);
-	
-	let mut queue: VecDeque<(GridPoint, Vec<Point>)> = VecDeque::new();
-	queue.push_back((s, vec![s.de_gridify()]));
-
-	
-	while !queue.is_empty() {
-	    let (cur_pos, path) = queue.pop_front().unwrap();
-
-
-	    for nei_try in self.get_successor(cur_pos) {
-		if let Some(nei) = nei_try {
-		    //eprintln!("cur_pos {} nei {} {} {}",cur_pos, nei, cur_pos.de_gridify(), nei.de_gridify());
-		    if !visited.contains(&nei) {
-			let new_vec:Vec<Point> =  path.iter().copied().chain(iter::once(nei.de_gridify())).collect();
-			queue.push_back((nei, new_vec.clone()));
-			visited.insert(nei);
-			//if Point::dist(&nei,&e) < 400.0 {
-			if GridPoint::dist(&e, &nei) < GRID_LIGHT_STD as f64 {
-			    return  Some(new_vec.clone());
-			}
-		    }
-		}
-	    }
-	}
-	None
-    }
-}
 
 
 
@@ -607,8 +690,9 @@ fn main() {
             let creature_y = parse_input!(inputs[2], i32);
             let creature_vx = parse_input!(inputs[3], i32);
             let creature_vy = parse_input!(inputs[4], i32);
-	    visible_fishes.push(Fish {fish_id:creature_id,pos: Point{x:creature_x, y:creature_y},speed: Point{x:creature_vx, y:creature_vy}, detail: *hash_fish.get(&creature_id).unwrap()});
+	    visible_fishes.push(Fish {fish_id:creature_id,pos: Point{x:creature_x, y:creature_y},pos_prev:None,speed: Point{x:creature_vx, y:creature_vy}, detail: *hash_fish.get(&creature_id).unwrap()});
         }
+
         let mut input_line = String::new();
         io::stdin().read_line(&mut input_line).unwrap();
         let radar_blip_count = parse_input!(input_line, i32);
@@ -636,9 +720,9 @@ fn main() {
         }
 	
 	let input_board = InputlBoard {fish_details:hash_fish.clone(), my_scans, opp_scans, my_drones, opp_drones, my_score:my_score, opp_score:foe_score, visible_fishes};
-	let board = Board::from_input_board(&input_board);
+	let board = Board::from_input_board(&input_board).next_board(&vec![]);
 	
-	let g_a = GridApprox::from_input_board(&board);
+	//let g_a = GridApprox::from_board(&board);
 	//eprintln!("{:?}", g_a);
 	
 
@@ -648,7 +732,16 @@ fn main() {
 	    
 	    let mut light = false;
 	    
-	    let mut target = Point {x:d.pos.x, y:500};
+	    
+	    let tmp = board.dfs(d.pos, Point {x:d.pos.x, y:500});
+	    let mut target  = Point {x:d.pos.x, y:500};
+	    if let Some(dest) = tmp {
+		target = dest[1];
+		 eprintln!("PATH first {:?}", dest);
+	    }
+	   
+	    
+	    
 
 	    
 	    if d.scans.len() < 5 {
@@ -668,18 +761,23 @@ fn main() {
 			continue;
 		    }
 
-		    let tmp = g_a.dfs(d.pos, g_a.grid_sliced[rb.fish_id as usize].unwrap().center());
-		    eprintln!("target {}", g_a.grid_sliced[rb.fish_id as usize].unwrap().center());
-		    eprintln!("PATH {:?}", tmp);
-		    eprintln!("FP");
+		    let tmp = board.dfs(d.pos, board.grid_sliced[rb.fish_id as usize].unwrap().center());
+		    //eprintln!("target {}", board.grid_sliced[rb.fish_id as usize].unwrap().center());
+		    //eprintln!("PATH {:?}", tmp);
+		    //eprintln!("FP");
 		    
 		    if let Some(t) = tmp {
 			target = t[1];
+		    }
+		    else {
+			eprintln!("Not found !!");
+			eprintln!("target {}", board.grid_sliced[rb.fish_id as usize].unwrap().center());
 		    }
 		    //target = go_dir(&rb.dir);
 		}
 
 	    }
+	    light = false;
 	    let ac = Action::MOVE(target, light);
 	    println!("{}", ac);
 	}
