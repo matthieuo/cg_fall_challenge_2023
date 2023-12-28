@@ -14,6 +14,9 @@ const MAX_CREATURES: usize = 22;
 const GRID_MAX_X: usize = 100;
 const GRID_MAX_Y: usize = 100;
 
+const UGLY_EAT_RANGE: i32 = 300;  //from cg ?
+const DRONE_HIT_RANGE: i32 = 200; // from cg ?
+
 const D_MONSTER_EMER: f64 = 500.0;
 const MONSTER_SPEED_ANGRY: i32 = 540;
 const D_MAX_DRONE: i32 = 600;
@@ -79,6 +82,10 @@ impl Point {
     }
     fn gridify(&self) -> GridPoint {
 	GridPoint {x:(self.x as f32/GRID_MAX_X as f32).floor() as i32, y:(self.y as f32/GRID_MAX_Y as f32).floor() as i32}
+    }
+
+     fn in_range(&self, v: Point, range: i32) -> bool {
+        (v.x - self.x) * (v.x - self.x) + (v.y - self.y) * (v.y - self.y) <= range * range
     }
 
     fn div(&self, d_f:f64) -> Point{
@@ -309,7 +316,7 @@ impl Board {
 	    }
 	}
 	
-	eprintln!("LIGHT : {}", d_light);
+	/*eprintln!("LIGHT : {}", d_light);
 	if (closest_dis as i32) <= d_light {
 	    //go to the direction of the drone
 
@@ -319,7 +326,7 @@ impl Board {
 	    fish.speed = p_new;
 	    //eprintln!("pt ne {} old: {} grid {}, idx{} {} {}", p_new, p, dist, idx, dx_n, dy_n);
 	    eprintln!("fspeed :{}", fish.speed);
-	} 
+	} */
 	// only update pos (spped already updated before)
 	fish.pos.x += fish.speed.x;
 	fish.pos.y += fish.speed.y;
@@ -345,35 +352,53 @@ impl Board {
 	out_b	
     }
 
-
-    fn monster_collision(&self, ps: Point, pe:Point, pe_inter_long: Point, pe_inter_short: Point, dir_d: Point) -> bool {
-	let mut coll_found = false;
+    fn monster_collision(&self, d_start: Point, d_speed: Point ) -> bool {
+	//let mut coll_found = false;
 	for f in self.visible_fishes.iter() {
 	    if f.detail.fish_type == -1 {
-		//check collision
+		if f.pos.in_range(d_start, DRONE_HIT_RANGE + UGLY_EAT_RANGE) {
+		    //coll_found = true;
+		    return true;
+		}
+		// Change referential
+		let x = f.pos.x;
+		let y = f.pos.y;
+		let ux = d_start.x;
+		let uy = d_start.y;
+		
+		let x2 = x - ux;
+		let y2 = y - uy;
+		let r2 = UGLY_EAT_RANGE + DRONE_HIT_RANGE;
+		let vx2 = f.speed.x - d_speed.x;
+		let vy2 = f.speed.y - d_speed.y;
 
-		if Point::dot(f.speed, dir_d) >= 0.0 {
-		    if Point::dist(&pe,&f.pos) <= D_MONSTER_EMER || Point::dist(&pe_inter_long,&f.pos) <= D_MONSTER_EMER{
-			//eprintln!("COL1 {} {}",ps, pe);
-			coll_found = true;
-		    }
-		} else {
-		    if Point::dist(&pe,&f.pos) <= D_MONSTER_EMER || Point::dist(&pe_inter_short,&f.pos) <= D_MONSTER_EMER{
-			//eprintln!("COL1 {} {}",ps, pe);
-			coll_found = true;
-		    }
+		let a = f64::from(vx2 * vx2 + vy2 * vy2);
+
+		if a <= 0.0 {
+		    continue;
 		}
-		if let Some(prev_p) = f.pos_prev {
-		    //if Point::is_circle_line_collision(ps, pe, prev_p, 500) {
-			if Point::dist(&pe,&prev_p) <= D_MONSTER_EMER { //|| Point::dist(&pe_inter,&prev_p) <= D_MONSTER_EMER{
-			//eprintln!("COL2 {} {}",ps, pe);
-			coll_found = true;
-		    }
+
+		let b = 2.0 * (x2 * vx2 + y2 * vy2) as f64;
+		let c = f64::from(x2 * x2 + y2 * y2 - r2 * r2);
+		let delta = f64::from(b * b - 4.0 * a * c);
+
+		if delta < 0.0 {
+		    continue
 		}
-	    }
+
+		let t = (-b - delta.sqrt()) / (2.0 * a);
+		
+		if t <= 0.0 || t > 1.0 {
+		    continue
+		}
+
+		return true;
+            }
 	}
-	coll_found
+	return false;
     }
+
+    
     fn get_successor(&self, p:GridPoint) -> [Option<GridPoint>;8] {
 	let mut ret_tab = [None;8];
 	let mut idx = 0; // bug enumerae
@@ -384,44 +409,21 @@ impl Board {
 	    }
 	    let dist = GridPoint::dist(&GridPoint {x:0,y:0} ,&GridPoint {x:dx_a,y:dy_a});
 	    let (dx_n, dy_n) = ((D_GRID_MAX_DRONE as f64/dist), (D_GRID_MAX_DRONE as f64/dist));
-	    let d_n_inter_long = ((D_GRID_MAX_DRONE as f64)/(2.0/3.0))/dist;
-	    let d_n_inter_short = ((D_GRID_MAX_DRONE as f64)/(3.0))/dist;
+	    let speed_drone =  GridPoint { x:((dx_a as f64)*dx_n) as i32,y:((dy_a as f64)*dy_n) as i32};
 	    let p_new = GridPoint {x:p.x + ((dx_a as f64)*dx_n) as i32,y:p.y + ((dy_a as f64)*dy_n) as i32};
-	    let p_new_intermediate_l = GridPoint {x:p.x + ((dx_a as f64)*(d_n_inter_long)) as i32,y:p.y + ((dy_a as f64)*(d_n_inter_long)) as i32}; //to check intermediate col
-	    let p_new_intermediate_s = GridPoint {x:p.x + ((dx_a as f64)*(d_n_inter_short)) as i32,y:p.y + ((dy_a as f64)*(d_n_inter_short)) as i32}; //to check intermediate col
-
-	    
-	    //eprintln!("pt ne {} inter {} dist: {}  idx{} {} {}", p_new, p_new_intermediate, dist, idx, dx_n, dy_n);
-	    //eprintln!("deg  ne {} inter {} orig {}", p_new.de_gridify(), p_new_intermediate.de_gridify(),p.de_gridify()) ;
-
+	  
 	    
 	    if p_new.x < 0 || p_new.x >= GRID_MAX_X as i32|| p_new.y < 0 || p_new.y >= GRID_MAX_X as i32{
 		continue;
 	    }
 
-	    if self.monster_collision(p.de_gridify(), p_new.de_gridify(),p_new_intermediate_l.de_gridify(), p_new_intermediate_s.de_gridify(),Point {x:dx_a,y:dy_a} ) {
+	    if self.monster_collision(p.de_gridify(), speed_drone.de_gridify() ) {
 		continue;
 	    }
 	    ret_tab[idx] = Some(p_new);
 	    idx +=1;
 	}
 
-	if ret_tab.iter().filter(|v| v.is_some()).count() == 0 {
-	    // only none
-	    eprintln!("None onl s {} sdg {}", p, p.de_gridify());
-	    for (dx_a,dy_a) in iproduct!([-1,0,1], [-1,0,1]) {
-		if dx_a == 0 && dy_a == 0 {
-		    continue;
-		}
-		let dist = GridPoint::dist(&GridPoint {x:0,y:0} ,&GridPoint {x:dx_a,y:dy_a});
-		let (dx_n, dy_n) = ((D_GRID_MAX_DRONE as f64/dist), (D_GRID_MAX_DRONE as f64/dist));
-		let d_n_inter = ((D_GRID_MAX_DRONE as f64)/2.0)/dist;
-		let p_new = GridPoint {x:p.x + ((dx_a as f64)*dx_n) as i32,y:p.y + ((dy_a as f64)*dy_n) as i32};
-		let p_new_intermediate = GridPoint {x:p.x + ((dx_a as f64)*(d_n_inter)) as i32,y:p.y + ((dy_a as f64)*(d_n_inter)) as i32}; //to check intermediate col
-		//eprintln!("pt ne {} inter {} dist: {}  idx{} {} {}", p_new, p_new_intermediate, dist, idx, dx_n, dy_n);
-		//eprintln!("deg  ne {} inter {} orig {}", p_new.de_gridify(), p_new_intermediate.de_gridify(),p.de_gridify()) ;
-	    }
-	}
 	ret_tab
     }
 
@@ -755,7 +757,7 @@ fn main() {
         }
 	
 	let input_board = InputlBoard {fish_details:hash_fish.clone(), my_scans, opp_scans, my_drones, opp_drones, my_score:my_score, opp_score:foe_score, visible_fishes};
-	let board = Board::from_input_board(&input_board).next_board(&vec![]);
+	let board = Board::from_input_board(&input_board);//; .next_board(&vec![]);
 	
 	//let g_a = GridApprox::from_board(&board);
 	//eprintln!("{:?}", g_a);
