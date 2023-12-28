@@ -284,7 +284,7 @@ impl Board {
 
 	for (idx,i) in tab_creat.iter().enumerate() {
 	    if let Some(it) = i {
-		eprintln!("fid {} - {}", idx, it);
+		//eprintln!("fid {} - {}", idx, it);
 	    }
 	}
 	
@@ -432,7 +432,7 @@ impl Board {
        let s = si.gridify();
        let e = ei.gridify();
        
-       eprintln!("dfs start {} end {} sg{} eg{}", si, ei, s, e);
+       //eprintln!("dfs start {} end {} sg{} eg{}", si, ei, s, e);
        let mut visited :HashSet<GridPoint> = HashSet::new();
 	visited.insert(s);
 	
@@ -778,16 +778,21 @@ fn main() {
 	    }
 	   
 	    
-	    
+	    let mut already_selected_fish = None;
 
 	    
-	    if d.scans.len() < 5 {
+	    if d.scans.len() < 9 {
 		let loc = d.where_i_am();
 		if d.battery >= 5 && loc != MapLocation::T && (cur_step + idx) % 3 == 0 {
                     light = true;
 		}
 		
 		for rb in d.radars.as_ref().unwrap() {
+		    if let Some(asf) = already_selected_fish {
+			if rb.fish_id == asf {
+			    continue;
+			}
+		    }
 		    if rb.fish_detail.fish_type == -1 {
 			continue; //we don't want monster...
 		    }
@@ -805,6 +810,8 @@ fn main() {
 		    
 		    if let Some(t) = tmp {
 			target = t[1];
+			already_selected_fish = Some(rb.fish_id);
+			continue;
 		    }
 		    else {
 			eprintln!("Not found !!");
