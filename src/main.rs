@@ -165,7 +165,7 @@ impl MapLocation {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RadarDir {
     TL, // : la créature est en haut à gauche du drone.
     TR, // : la créature est en haut à droite du drone.
@@ -490,7 +490,7 @@ impl fmt::Display for Action {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
   	match self {
 	    Action::MOVE(p, l) => fmt.write_str(&format!("MOVE {} {} {}",p.x,p.y,*l as i32))?,
-	    Action::WAIT(l) => fmt.write_str(&format!("WAIT {}", l))?,
+	    Action::WAIT(l) => fmt.write_str(&format!("WAIT {}", *l as i32))?,
 	}
         Ok(())
     }
@@ -763,68 +763,61 @@ fn main() {
 	//eprintln!("{:?}", g_a);
 	let start = Instant::now();
 
+	let mut go_up = [false; 2];
+	let mut targets = [None;2];
+	
 	for (idx, d) in board.my_drones.iter().enumerate() {
-
-
-	    
 	    let mut light = false;
-	    
-	    
-	    let tmp = board.dfs(d.pos, Point {x:d.pos.x, y:500});
-	    let mut target  = Point {x:d.pos.x, y:500};
-	    if let Some(dest) = tmp {
-		target = dest[1];
-		 eprintln!("PATH first {:?}", dest);
-	    }
-	   
-	    
-	    let mut already_selected_fish = None;
 
-	    
-	    if d.scans.len() < 9 {
+	    let target; // = tmp.unwrap()[1]; // Point {x:d.pos.x, y:500};
+	   
+	    if  go_up[idx] {
+		target = Point {x:d.pos.x, y:500};
+	    }
+
+	    else {
 		let loc = d.where_i_am();
 		if d.battery >= 5 && loc != MapLocation::T && (cur_step + idx) % 3 == 0 {
                     light = true;
 		}
-		
-		for rb in d.radars.as_ref().unwrap() {
-		    if let Some(asf) = already_selected_fish {
-			if rb.fish_id == asf {
-			    continue;
-			}
-		    }
-		    if rb.fish_detail.fish_type == -1 {
-			continue; //we don't want monster...
-		    }
-		    if let Some(_) = board.my_scans.iter().find(|e| e == &&rb.fish_id) {
-			continue;
-		    }
-		    if let Some(_) = d.scans.iter().find(|e| e == &&rb.fish_id) {
-			continue;
-		    }
 
-		    let tmp = board.dfs(d.pos, board.grid_sliced[rb.fish_id as usize].unwrap().center());
-		    //eprintln!("target {}", board.grid_sliced[rb.fish_id as usize].unwrap().center());
-		    //eprintln!("PATH {:?}", tmp);
-		    //eprintln!("FP");
-		    
-		    if let Some(t) = tmp {
-			target = t[1];
-			already_selected_fish = Some(rb.fish_id);
-			continue;
-		    }
-		    else {
-			eprintln!("Not found !!");
-			eprintln!("target {}", board.grid_sliced[rb.fish_id as usize].unwrap().center());
-		    }
-		    //target = go_dir(&rb.dir);
+		let mut possible_target: Vec<RadarBlip> = d.radars.as_ref().unwrap().iter().filter(|rb| rb.fish_detail.fish_type != -1)
+		    .filter(|rb| {
+			if let Some(prev) = targets[(idx+1)%2 as usize] {
+			    prev != rb.fish_id
+			} else {true}
+		    })
+		    .filter(|rb| board.my_scans.iter().find(|e| e == &&rb.fish_id).is_none()).map(|rb| rb.clone())
+		    .filter(|rb| board.my_drones.iter().filter(|d| d.scans.contains(&rb.fish_id)).count() == 0)
+		    .filter(|rb| board.dfs(d.pos, board.grid_sliced[rb.fish_id as usize].unwrap().center()).is_some()).collect();
+		
+		possible_target.sort_by_key(|k| k.fish_detail.fish_type);
+		possible_target.reverse();
+		eprintln!("poss_tar {:?}", possible_target);
+		if !possible_target.is_empty() {
+		    target = board.grid_sliced[possible_target[0].fish_id as usize].unwrap().center();
+		    targets[idx] = Some(possible_target[0].fish_id);
+		} else {
+		    target = Point {x:d.pos.x, y:500};
+		    //targets[idx] = Some(possible_target[0].fish_id);
 		}
 
 	    }
 	    //light = false;
-	    let ac = Action::MOVE(target, light);
-	    println!("{}", ac);
-	    prev_action[d.drone_id as usize] = Some(ac);
+	    let path = board.dfs(d.pos, target);
+
+	    if let Some(p_dir) = path {
+		let ac = Action::MOVE(p_dir[1], light);
+		prev_action[d.drone_id as usize] = Some(ac);
+		println!("{}", ac);
+	    } else {
+		let ac = Action::WAIT(light);
+		println!("{} mmmh, ", ac);
+	    }
+
+
+	    
+	  
 	}
 	let duration = start.elapsed();
 	eprintln!("TIME {:?}", duration);
