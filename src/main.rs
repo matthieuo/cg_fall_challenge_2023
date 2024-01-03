@@ -529,25 +529,25 @@ impl Board {
 	    }
 	}
 
-
-
-	
-	
-	    
-	
 	
 	out_b	
     }
 
     fn eval_position(&self) -> f64 {
 
+	let mut dist_fish = [None;MAX_CREATURES];
 
+	for (idx,gs_t) in self.grid_sliced.iter().enumerate() {
+	    if let Some(gs) = gs_t {
+		dist_fish[idx] = Some([Point::dist(&self.my_drones[0].pos, &gs.center()), Point::dist(&self.my_drones[1].pos, &gs.center())]);
+	    }
+	}
 
 	let mut dist_max = 0.0;
 	for d in self.my_drones.iter() {
 	    for (f_id,(fd_t, sg_t)) in self.hash_fishes.iter().zip(self.grid_sliced.iter()).enumerate() {
 		if let (Some(fd),Some(sg)) = (fd_t, sg_t) {
-		    if fd.fish_type == -1 { continue;}
+		    if fd.fish_type < 2 { continue;}
 		    if !d.scans.iter().any(|s| s.f_id == f_id as i32) {
 			dist_max += (((fd.fish_type as f64+1.0) )*2.0)*Point::dist(&d.pos, &sg.center());
 
@@ -556,11 +556,21 @@ impl Board {
 		}
 		
 	    }
+
+
+
+	dist_max = (2.0_f64.powf(dist_fish[14].unwrap()[1]/10000.0) + 2.0_f64.powf(dist_fish[15].unwrap()[0]/10000.0))/2.0;
+	if self.game_turn > 14 {
+	  //  	eprintln!("{} {}",  dist_fish[14].unwrap()[1] , dist_fish[15].unwrap()[0]);
+	 //   eprintln!("dm {}", dist_max);
+	}
+	//eprintln!("dm {} el {}", dist_max, Point::dist(&self.my_drones[0].pos, &self.my_drones[1].pos) / 10000.0);
+
 	
-//	Point::dist(&self.my_drones[0].pos, &self.my_drones[1].pos) / 10000.0 	// drones should be distant
-	     self.my_scans.len() as f64
-	    + self.my_drones.iter().map(|d| d.scans.len()).count() as f64
-	    + self.my_scans.len() as f64
+	//Point::dist(&self.my_drones[0].pos, &self.my_drones[1].pos) / 10000.0 	// drones should be distant
+	  //  self.my_scans.len() as f64
+	   //+ self.my_drones.iter().map(|d| d.scans.len()).sum::<usize>() as f64
+	   //+ self.my_scans.len() as f64
 	    - dist_max
     }
 
@@ -740,13 +750,20 @@ impl Board {
 
     /// search best position
     fn bfs_search(&self) -> Option<[Action; NUM_PLAY_D]> {
+
+	let mut visited1 :HashSet<GridPoint> = HashSet::new();
+	let mut visited2 :HashSet<GridPoint> = HashSet::new();
+
+
+	
 	let mut queue: VecDeque<(Board, Option<[Action; NUM_PLAY_D]>, i32)> = VecDeque::new();
 	queue.push_back((self.clone(), None, 0));
 
 
 	let mut max_position = f64::MIN;
 	let mut max_board = None;
-
+	let mut real_max_board = None;
+	
 	let mut deep;
 
 	let mut num_simu = 0;
@@ -760,6 +777,19 @@ impl Board {
 	    //for (ac1_try,ac2_try) in iproduct!(acts[0],acts[1]) { //cartesian product of all actions
 	    for (ac1_try,ac2_try) in iproduct!(acts[0],acts[1]) { //cartesian product of all actions		    
 		if let (Some(ac1), Some(ac2)) = (ac1_try, ac2_try) {
+
+		  /*  if let (Action::MOVE(p1,_), Action::MOVE(p2,_))  = (ac1,ac2) {
+			if visited1.contains(&p1.gridify()) && visited2.contains(&p2.gridify()) {
+			    continue;
+			} else {
+			    visited1.insert(p1.gridify());
+			    visited2.insert(p2.gridify());
+			}
+		    }*/
+
+
+
+		    //if !visited.contains(&nei) {
 		    //eprintln!("cur_pos {} nei {} {} {}",cur_pos, nei, cur_pos.de_gridify(), nei.de_gridify());
 		    //eprintln!("ac 1 {} ac 2 {}",ac1, ac2);
 		    let next_board = cur_board.next_board(&[ac1,ac2],&[ac1,ac2]);
@@ -778,6 +808,7 @@ impl Board {
 		    if next_pos_val > max_position {
 			max_position = next_pos_val;
 			max_board = to_put;
+			real_max_board = Some(next_board.clone());
 		    }
 
 		    
@@ -788,6 +819,7 @@ impl Board {
 	    let duration = start.elapsed();
 	    if duration.as_millis() > 30 {
 		eprintln!("BREAK deep {} simu {} ms {}", deep, num_simu, duration.as_millis());
+		eprintln!("{:?}", real_max_board);
 		break;
 	    }
 	}
