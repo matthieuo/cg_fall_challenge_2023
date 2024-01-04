@@ -1,5 +1,6 @@
 use std::{io, fmt, cmp, iter};
 use itertools::iproduct;
+use libc::SYS_capget;
 use std::time::{Duration, Instant};
 use rand::{thread_rng, Rng};
 use std::collections::{HashSet, VecDeque, HashMap};
@@ -253,9 +254,71 @@ impl Drone {
 }
 
 #[derive(Debug, Clone)]
-struct Board {
+struct Score {
+    num_by_type: [i32;3], //3 types
+    num_by_color:[i32;4],
     my_score: i32,
     opp_score: i32,
+}
+
+impl Score {
+
+    fn get_best_type(&self) -> Option<i32> {
+	if self.num_by_type[2] > 0 {
+	    return Some(2);
+	}
+	if self.num_by_type[1] > 0 {
+	    return Some(1);
+	}
+	if self.num_by_type[0] > 0 {
+	    return Some(0);
+	}
+
+	None
+    }
+    
+    fn from_init_state(my_s: i32, opp_s: i32, my_scan: &Vec<Scan>, my_d: &Vec<Drone>, hash_fishes: &[Option<FishDetail>;MAX_CREATURES]) -> Score {
+
+
+	let mut h_se = HashSet::new();
+	
+	let mut ro_num_by_type= [0;3]; 
+	let mut ro_num_by_color = [0;4];
+
+	//total number
+	let d = &my_d[0]; //take first radars (there are same)
+	for r in d.radars.as_ref().unwrap() {
+	    if r.fish_detail.fish_type != - 1 {
+	    	h_se.insert(r.fish_id);
+	    }
+	}
+
+	for sc in my_scan {
+	    h_se.remove(&sc.f_id);
+	}
+
+	for d in my_d {
+	    for sc in &d.scans {
+		h_se.remove(&sc.f_id);
+	    }
+	}
+
+	for &fid in  h_se.iter() {
+	    let fd = hash_fishes[fid as usize].unwrap();
+	    ro_num_by_color[fd.color as usize] += 1;
+	    ro_num_by_type[fd.fish_type as usize] += 1;
+	}
+
+	Score {my_score:my_s, opp_score:opp_s, num_by_color:ro_num_by_color, num_by_type:ro_num_by_type}
+
+	
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Board {
+
+    score_mg: Score,
     
     my_scans: Vec<Scan>,
     opp_scans: Vec<Scan>,
@@ -312,8 +375,13 @@ impl Board {
 		//eprintln!("fid {} - {}", idx, it);
 	    }
 	}
+
+	// Score creation
+	let sc = Score::from_init_state(ib.my_score, ib.opp_score, &ib.my_scans, &ib.my_drones, &ib.hash_fishes);
+
+	eprintln!("scor {:?}", sc);
 	
-	Board {my_score:ib.my_score, opp_score:ib.opp_score, my_scans:ib.my_scans.clone(), opp_scans: ib.opp_scans.clone(), my_drones:ib.my_drones.clone(), opp_drones:ib.opp_drones.clone(), visible_fishes:ib.visible_fishes.clone(), grid_sliced:tab_creat, predition_level:0, hash_fishes:ib.hash_fishes, game_turn:ib.game_turn}
+	Board {score_mg:sc, my_scans:ib.my_scans.clone(), opp_scans: ib.opp_scans.clone(), my_drones:ib.my_drones.clone(), opp_drones:ib.opp_drones.clone(), visible_fishes:ib.visible_fishes.clone(), grid_sliced:tab_creat, predition_level:0, hash_fishes:ib.hash_fishes, game_turn:ib.game_turn}
     }
 
     ///update monsters coordinate for next step
@@ -542,24 +610,47 @@ impl Board {
 		dist_fish[idx] = Some([Point::dist(&self.my_drones[0].pos, &gs.center()), Point::dist(&self.my_drones[1].pos, &gs.center())]);
 	    }
 	}
+	
 
 	let mut dist_max = 0.0;
-	for d in self.my_drones.iter() {
-	    for (f_id,(fd_t, sg_t)) in self.hash_fishes.iter().zip(self.grid_sliced.iter()).enumerate() {
-		if let (Some(fd),Some(sg)) = (fd_t, sg_t) {
-		    if fd.fish_type < 2 { continue;}
-		    if !d.scans.iter().any(|s| s.f_id == f_id as i32) {
-			dist_max += (((fd.fish_type as f64+1.0) )*2.0)*Point::dist(&d.pos, &sg.center());
 
+	let mut cur_score = self.score_mg.clone();
+	
+	for (id_d,d) in self.my_drones.iter().enumerate() {
+	    let mut min_v = f64::MAX;
+	    
+	 
+
+	    if let Some(type_obj) = cur_score.get_best_type() {	    
+		cur_score.num_by_type[type_obj as usize] -= 1;
+		//eprintln!("{}", type_obj);
+		for (f_id,(fd_t, sg_t)) in self.hash_fishes.iter().zip(self.grid_sliced.iter()).enumerate() {
+		    if let (Some(fd),Some(sg)) = (fd_t, sg_t) {
+			if fd.fish_type == -1 || f_id == d.drone_id as usize{ continue;}
+			if fd.fish_type != type_obj {continue;}
+			if !d.scans.iter().any(|s| s.f_id == f_id as i32) && !self.my_scans.iter().any(|s| s.f_id == f_id as i32){
+			    //dist_max += dist_fish.iter().filter(|e| e.is_some()).map(|e| e.unwrap()[id_d]).min_by(|a,b| a.partial_cmp(b).unwrap()).unwrap();
+			    //dist_max += (((fd.fish_type as f64+1.0) )*2.0)*Point::dist(&d.pos, &sg.center());
+			    
+			    //fid is the target
+			    if dist_fish[f_id].unwrap()[id_d] < min_v {
+				min_v = dist_fish[f_id].unwrap()[id_d];
+			    }
 			}
 		    }
 		}
-		
+		dist_max += min_v/10000.0;
+	    } else {
+		//we must go up
+		dist_max+= Point::dist(&d.pos, & Point {x: d.pos.x, y: 100})/10000.0;
 	    }
+	    
+	}
 
 
 
-	dist_max = (2.0_f64.powf(dist_fish[14].unwrap()[1]/10000.0) + 2.0_f64.powf(dist_fish[15].unwrap()[0]/10000.0))/2.0;
+	//dist_max = (2.0_f64.powf(dist_fish[14].unwrap()[1]/10000.0) + 2.0_f64.powf(dist_fish[15].unwrap()[0]/10000.0))/2.0;
+	//dist_max = ((dist_fish[14].unwrap()[0]/10000.0) + (dist_fish[15].unwrap()[1]/10000.0))/2.0;
 	if self.game_turn > 14 {
 	  //  	eprintln!("{} {}",  dist_fish[14].unwrap()[1] , dist_fish[15].unwrap()[0]);
 	 //   eprintln!("dm {}", dist_max);
@@ -567,11 +658,11 @@ impl Board {
 	//eprintln!("dm {} el {}", dist_max, Point::dist(&self.my_drones[0].pos, &self.my_drones[1].pos) / 10000.0);
 
 	
-	//Point::dist(&self.my_drones[0].pos, &self.my_drones[1].pos) / 10000.0 	// drones should be distant
+	Point::dist(&self.my_drones[0].pos, &self.my_drones[1].pos) / 100000.0 	// drones should be distant
 	  //  self.my_scans.len() as f64
 	   //+ self.my_drones.iter().map(|d| d.scans.len()).sum::<usize>() as f64
 	   //+ self.my_scans.len() as f64
-	    - dist_max
+	    - 2.0*dist_max/2.0
     }
 
     fn get_possible_actions_play(&self) -> [[Option<Action>;8]; NUM_PLAY_D] {
@@ -777,8 +868,8 @@ impl Board {
 	    //for (ac1_try,ac2_try) in iproduct!(acts[0],acts[1]) { //cartesian product of all actions
 	    for (ac1_try,ac2_try) in iproduct!(acts[0],acts[1]) { //cartesian product of all actions		    
 		if let (Some(ac1), Some(ac2)) = (ac1_try, ac2_try) {
-
-		  /*  if let (Action::MOVE(p1,_), Action::MOVE(p2,_))  = (ac1,ac2) {
+		  
+		/*    if let (Action::MOVE(p1,_), Action::MOVE(p2,_))  = (ac1,ac2) {
 			if visited1.contains(&p1.gridify()) && visited2.contains(&p2.gridify()) {
 			    continue;
 			} else {
@@ -805,6 +896,7 @@ impl Board {
 		    queue.push_back((next_board.clone(), to_put, cur_deep + 1));
 
 		    let next_pos_val = next_board.eval_position();
+		    //eprintln!("pm {} {} npv {}", ac1, ac2, next_pos_val);
 		    if next_pos_val > max_position {
 			max_position = next_pos_val;
 			max_board = to_put;
@@ -817,9 +909,9 @@ impl Board {
 	    }
 	    
 	    let duration = start.elapsed();
-	    if duration.as_millis() > 30 {
+	    if deep > 1 || duration.as_millis() > 30 {
 		eprintln!("BREAK deep {} simu {} ms {}", deep, num_simu, duration.as_millis());
-		eprintln!("{:?}", real_max_board);
+		//eprintln!("{:?}", real_max_board);
 		break;
 	    }
 	}
@@ -1144,8 +1236,18 @@ fn main() {
 	let found_acts = board.bfs_search();
 
 	if let Some(acts) = found_acts {
-	    for ac in acts {
-		println!("{}", ac);
+	    
+	    for (id_d,ac) in acts.iter().enumerate() {
+		let loc = board.my_drones[id_d].where_i_am();
+		let mut light = false;
+		if  board.my_drones[id_d].battery >= 5 && loc != MapLocation::T && (cur_step as usize + id_d) % 3 == 0 {
+                    light = true;
+		}
+		if let Action::MOVE(p, _) = ac {
+		    println!("{}", Action::MOVE(*p, light));
+		} else {
+		     println!("{} HEUUUU, ", ac);
+		}
 	    }
 	} else {
 	    let ac = Action::WAIT(false);
@@ -1154,8 +1256,8 @@ fn main() {
 	}
 	
 	
-	/*
-	let mut go_up = [false; 2];
+	
+/*	let mut go_up = [false; 2];
 	let mut targets = [None;2];
 
 
@@ -1171,7 +1273,7 @@ fn main() {
 
 	    else {
 		let loc = d.where_i_am();
-		if d.battery >= 5 && loc != MapLocation::T && (cur_step + idx) % 3 == 0 {
+		if d.battery >= 5 && loc != MapLocation::T && (cur_step as usize + idx) % 3 == 0 {
                     light = true;
 		}
 
@@ -1182,19 +1284,20 @@ fn main() {
 			} else {true}
 		    })*/
 		    .filter(|rb| if d.drone_id == initial_left.unwrap()  {board.grid_sliced[rb.fish_id as usize].unwrap().center().x <= 5000} else {board.grid_sliced[rb.fish_id as usize].unwrap().center().x > 5000})
-		    .filter(|rb| board.my_scans.iter().find(|e| e == &&rb.fish_id).is_none()).map(|rb| rb.clone())
-		    .filter(|rb| board.my_drones.iter().filter(|d| d.scans.contains(&rb.fish_id)).count() == 0)
+		    .filter(|rb| board.my_scans.iter().find(|e| e.f_id == rb.fish_id).is_none()).map(|rb| rb.clone())
+		    .filter(|rb| board.my_drones.iter().filter(|d| d.scans.iter().any(|s| s.f_id == rb.fish_id)).count() == 0)
 		    .filter(|rb| board.dfs(d.pos, board.grid_sliced[rb.fish_id as usize].unwrap().center()).is_some()).collect();
 
 		//possible_target.sort_unstable_by(|b,a| a.fish_detail.fish_type.cmp(&b.fish_detail.fish_type));
 		if d.drone_id != initial_left.unwrap() {
-		    
-		    possible_target.sort_unstable_by(|b,a| a.fish_detail.fish_type.cmp(&b.fish_detail.fish_type)
-						     .then(board.grid_sliced[a.fish_id as usize].unwrap().center().x.cmp(&board.grid_sliced[b.fish_id as usize].unwrap().center().x)));
+		    possible_target.sort_unstable_by(|b,a| board.grid_sliced[a.fish_id as usize].unwrap().center().x.cmp(&board.grid_sliced[b.fish_id as usize].unwrap().center().x));
+		 /*   possible_target.sort_unstable_by(|b,a| a.fish_detail.fish_type.cmp(&b.fish_detail.fish_type)
+						     .then(board.grid_sliced[a.fish_id as usize].unwrap().center().x.cmp(&board.grid_sliced[b.fish_id as usize].unwrap().center().x)));*/
 		}
 		else {
-		    possible_target.sort_unstable_by(|b,a| a.fish_detail.fish_type.cmp(&b.fish_detail.fish_type)
-						     .then(board.grid_sliced[b.fish_id as usize].unwrap().center().x.cmp(&board.grid_sliced[a.fish_id as usize].unwrap().center().x)));
+		    possible_target.sort_unstable_by(|b,a| board.grid_sliced[b.fish_id as usize].unwrap().center().x.cmp(&board.grid_sliced[a.fish_id as usize].unwrap().center().x));
+		   /* possible_target.sort_unstable_by(|b,a| a.fish_detail.fish_type.cmp(&b.fish_detail.fish_type)
+						     .then(board.grid_sliced[b.fish_id as usize].unwrap().center().x.cmp(&board.grid_sliced[a.fish_id as usize].unwrap().center().x)));*/
 		}
 		
 		//possible_target.sort_by_key(|k| k.fish_detail.fish_type);
