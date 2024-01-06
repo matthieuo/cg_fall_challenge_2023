@@ -338,6 +338,59 @@ struct Board {
 }
 
 impl Board {
+    fn merge_board(cur_b:&Board, prev_b:&Board) -> Board {
+	let mut m_prev = prev_b.clone();
+	let mut out_b = cur_b.clone();
+	
+	for (f_id,(fd_t, sg_t)) in m_prev.hash_fishes.iter().zip(m_prev.grid_sliced.iter_mut()).enumerate() {
+		if let (Some(fd),Some(sg)) = (fd_t, sg_t) {
+
+		    let accel_to_add;
+		    
+		    if fd.fish_type == -1 {
+			accel_to_add = 540.0; //we don't know if panicked or not
+		    } else {
+			accel_to_add = 400.0; //idem
+		    }
+		    // add the computed acceleration
+		    let mut new_sg = *sg;
+	//	    let mut new_sgB = *sg;
+		    new_sg.p_min = Point::add(new_sg.p_min, Point {x:-(accel_to_add/SQRT_2) as i32, y:-(accel_to_add/SQRT_2) as i32});
+		    new_sg.p_max = Point::add(new_sg.p_max, Point {x:(accel_to_add/SQRT_2) as i32, y:(accel_to_add/SQRT_2) as i32});
+		    new_sg.is_unique = false;
+		    
+		    new_sg.p_min.x = i32::max(0, new_sg.p_min.x);
+		    new_sg.p_min.y = i32::max(0, new_sg.p_min.y);
+		    new_sg.p_max.x = i32::max(0, new_sg.p_max.x);
+		    new_sg.p_max.y = i32::max(0, new_sg.p_max.y);
+
+		    new_sg.p_min.x = i32::min(10000, new_sg.p_min.x);
+		    new_sg.p_min.y = i32::min(10000, new_sg.p_min.y);
+		    new_sg.p_max.x = i32::min(10000, new_sg.p_max.x);
+		    new_sg.p_max.y = i32::min(10000, new_sg.p_max.y);
+			
+		    //clamp to area
+
+		    let gs_f = GridSlice::from_map_loc(fd.get_zone());
+		    let inter = new_sg.intersec(gs_f);
+
+		    *sg = inter;
+		}
+	}
+
+
+	// if more precision in the previous table, keep it
+	for (prev_grid_t, out_grid_t) in m_prev.grid_sliced.iter().zip(out_b.grid_sliced.iter_mut()) {
+	    if let (Some(prev_grid), Some(out_grid)) = (prev_grid_t, out_grid_t) {
+		if prev_grid.num_elems() < out_grid.num_elems() {
+		    *out_grid = *prev_grid;
+		}
+	    }
+	    	    
+	}
+	out_b
+    }
+    
     fn from_input_board(ib: &InputlBoard) -> Board {
 	let mut tab_creat :[Option<GridSlice>; MAX_CREATURES] = [None; MAX_CREATURES];
 	
@@ -519,7 +572,7 @@ impl Board {
 	    out_b.visible_fishes.clear(); //no visible fishes for the other prediction
 	} else {
 	    // we are in > 1 step, lets improvise...
-
+	    //eprintln!("MORE... {}", out_b.predition_level );
 	    //for f in out_b.
 	    for (f_id,(fd_t, sg_t)) in out_b.hash_fishes.iter().zip(out_b.grid_sliced.iter_mut()).enumerate() {
 		if let (Some(fd),Some(sg)) = (fd_t, sg_t) {
@@ -603,7 +656,7 @@ impl Board {
 
     fn eval_position(&self) -> f64 {
 
-	let mut dist_fish = [None;MAX_CREATURES];
+	let mut dist_fish = [None;MAX_CREATURES]; //dist from drone 0 and 1
 
 	for (idx,gs_t) in self.grid_sliced.iter().enumerate() {
 	    if let Some(gs) = gs_t {
@@ -614,40 +667,76 @@ impl Board {
 
 	let mut dist_max = 0.0;
 
-	let mut cur_score = self.score_mg.clone();
+	let mut dist_max_monster = 0.0;
+	let mut num_monster = 0;
 	
-	for (id_d,d) in self.my_drones.iter().enumerate() {
-	    let mut min_v = f64::MAX;
-	    
-	 
+	let mut cur_score = self.score_mg.clone();
 
+	let mut res_dist = [[None;NUM_PLAY_D];NUM_PLAY_D];
+	
+	for (id_d_up,d_up) in self.my_drones.iter().enumerate() {
+	    
 	    if let Some(type_obj) = cur_score.get_best_type() {	    
 		cur_score.num_by_type[type_obj as usize] -= 1;
 		//eprintln!("{}", type_obj);
-		for (f_id,(fd_t, sg_t)) in self.hash_fishes.iter().zip(self.grid_sliced.iter()).enumerate() {
-		    if let (Some(fd),Some(sg)) = (fd_t, sg_t) {
-			if fd.fish_type == -1 || f_id == d.drone_id as usize{ continue;}
-			if fd.fish_type != type_obj {continue;}
-			if !d.scans.iter().any(|s| s.f_id == f_id as i32) && !self.my_scans.iter().any(|s| s.f_id == f_id as i32){
-			    //dist_max += dist_fish.iter().filter(|e| e.is_some()).map(|e| e.unwrap()[id_d]).min_by(|a,b| a.partial_cmp(b).unwrap()).unwrap();
-			    //dist_max += (((fd.fish_type as f64+1.0) )*2.0)*Point::dist(&d.pos, &sg.center());
+		for (id_d,d) in self.my_drones.iter().enumerate() {
+		    let mut min_v = f64::MAX;
+		    for (f_id,(fd_t, sg_t)) in self.hash_fishes.iter().zip(self.grid_sliced.iter()).enumerate() {
+			if let (Some(fd),Some(sg)) = (fd_t, sg_t) {
 			    
-			    //fid is the target
-			    if dist_fish[f_id].unwrap()[id_d] < min_v {
-				min_v = dist_fish[f_id].unwrap()[id_d];
+			    if fd.fish_type == -1 {
+				dist_max_monster += dist_fish[f_id].unwrap()[id_d]/sg.num_elems() as f64;
+				num_monster += 1;
+			    }
+			    
+			    if fd.fish_type == -1 || f_id == d.drone_id as usize{ continue;}
+			    if fd.fish_type != type_obj {continue;}
+			    if !d.scans.iter().any(|s| s.f_id == f_id as i32) && !self.my_scans.iter().any(|s| s.f_id == f_id as i32){
+				//fid is the target
+				if dist_fish[f_id].unwrap()[id_d] < min_v {
+				    min_v = dist_fish[f_id].unwrap()[id_d];
+				}
 			    }
 			}
 		    }
+		    res_dist[id_d_up as usize][id_d as usize] = Some(min_v/10000.0);
 		}
-		dist_max += min_v/10000.0;
+		//dist_max += min_v/10000.0;
 	    } else {
 		//we must go up
-		dist_max+= Point::dist(&d.pos, & Point {x: d.pos.x, y: 100})/10000.0;
+		dist_max +=  d_up.pos.y as f64;//   ::dist(&d_up.pos, & Point {x: 5000, y: 400})/10000.0;
 	    }
 	    
 	}
 
+	if let (Some(rd1), Some(rd2)) = (res_dist[0][0], res_dist[0][1]) {
+	    if rd1 < rd2 {
+		dist_max += rd1;
+		if let Some(rd2_p) =  res_dist[1][1] {
+		    dist_max += rd2_p;
+		} /*else {
+		    //go up for the drone 2
+		    dist_max += self.my_drones[1].pos.y as f64;
+		}*/
+	    } else {
+		dist_max += rd2;
+		if let Some(rd1_p) =  res_dist[1][0] {
+		    dist_max += rd1_p;
+		}
+	    }
+	}
 
+/*	if let (Some(rd1), Some(rd2)) = (res_dist[1][0], res_dist[1][1]) {
+	    if rd1 < rd2 {
+		dist_max += rd1;
+	    } else {
+		dist_max += rd2;
+	    }
+	}*/
+	
+	
+	dist_max_monster /= num_monster as f64;
+	dist_max_monster /= 10000.0;
 
 	//dist_max = (2.0_f64.powf(dist_fish[14].unwrap()[1]/10000.0) + 2.0_f64.powf(dist_fish[15].unwrap()[0]/10000.0))/2.0;
 	//dist_max = ((dist_fish[14].unwrap()[0]/10000.0) + (dist_fish[15].unwrap()[1]/10000.0))/2.0;
@@ -659,10 +748,12 @@ impl Board {
 
 	
 	Point::dist(&self.my_drones[0].pos, &self.my_drones[1].pos) / 100000.0 	// drones should be distant
+
 	  //  self.my_scans.len() as f64
 	   //+ self.my_drones.iter().map(|d| d.scans.len()).sum::<usize>() as f64
 	   //+ self.my_scans.len() as f64
 	    - 2.0*dist_max/2.0
+	   // + 0.001*dist_max_monster
     }
 
     fn get_possible_actions_play(&self) -> [[Option<Action>;8]; NUM_PLAY_D] {
@@ -861,8 +952,21 @@ impl Board {
 	let start = Instant::now();
 	
 	while !queue.is_empty() {
+
+	    
 	    let (cur_board, first_action, cur_deep) = &queue.pop_front().unwrap();
 	    deep = *cur_deep;
+
+	    let duration = start.elapsed();
+	    if deep > 1 || duration.as_millis() > 40 {
+		eprintln!("BREAK deep {} simu {} ms {}", deep, num_simu, duration.as_millis());
+		//eprintln!("{:?}", real_max_board);
+		break;
+	    }
+
+	    if deep != cur_board.predition_level {
+		eprintln!("diff {} {}", deep, cur_board.predition_level);
+	    }
 
 	    let acts = cur_board.get_possible_actions_play(); 
 	    //for (ac1_try,ac2_try) in iproduct!(acts[0],acts[1]) { //cartesian product of all actions
@@ -884,6 +988,9 @@ impl Board {
 		    //eprintln!("cur_pos {} nei {} {} {}",cur_pos, nei, cur_pos.de_gridify(), nei.de_gridify());
 		    //eprintln!("ac 1 {} ac 2 {}",ac1, ac2);
 		    let next_board = cur_board.next_board(&[ac1,ac2],&[ac1,ac2]);
+		    if next_board.predition_level > 1 {
+			break;
+		    }
 		    num_simu += 1;
 		    //let new_vec:Vec<Point> =  path.iter().copied().chain(iter::once(nei.de_gridify())).collect();
 		    let to_put;
@@ -908,12 +1015,7 @@ impl Board {
 		}
 	    }
 	    
-	    let duration = start.elapsed();
-	    if deep > 1 || duration.as_millis() > 30 {
-		eprintln!("BREAK deep {} simu {} ms {}", deep, num_simu, duration.as_millis());
-		//eprintln!("{:?}", real_max_board);
-		break;
-	    }
+
 	}
 	max_board
     }
@@ -1076,7 +1178,8 @@ fn main() {
 	    
     //println!("{}", ac); // MOVE <x> <y> <light (1|0)> | WAIT <light (1|0)>
 
-   
+
+    let mut v_board = Vec::new();
 
     let mut prev_action: [Option<Action>; MAX_DRONES] = [None; MAX_DRONES];
     
@@ -1226,7 +1329,19 @@ fn main() {
         }
 	
 	let input_board = InputlBoard {hash_fishes:hash_fish, my_scans, opp_scans, my_drones, opp_drones, my_score:my_score, opp_score:foe_score, visible_fishes, game_turn:cur_step};
-	let board = Board::from_input_board(&input_board);
+	let board_init = Board::from_input_board(&input_board);
+
+	let board;// = board_init;
+	if !v_board.is_empty() {
+	    board = Board::merge_board(&board_init, &v_board.last().unwrap());
+	}
+	else {
+	    board = board_init;
+	}
+
+	eprintln!("ib {:?}", board.grid_sliced);
+
+	v_board.push(board.clone());
 	
 	//let g_a = GridApprox::from_board(&board);
 	//eprintln!("{:?}", g_a);
@@ -1240,7 +1355,7 @@ fn main() {
 	    for (id_d,ac) in acts.iter().enumerate() {
 		let loc = board.my_drones[id_d].where_i_am();
 		let mut light = false;
-		if  board.my_drones[id_d].battery >= 5 && loc != MapLocation::T && (cur_step as usize + id_d) % 3 == 0 {
+		if  board.my_drones[id_d].battery >= 5 && loc != MapLocation::T && (cur_step as usize + id_d) % 2 == 0 {
                     light = true;
 		}
 		if let Action::MOVE(p, _) = ac {
