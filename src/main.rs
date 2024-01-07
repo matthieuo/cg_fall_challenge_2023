@@ -1,4 +1,4 @@
-use std::{io, fmt, cmp, iter};
+use std::{io, fmt, cmp, iter, mem};
 use itertools::iproduct;
 use libc::SYS_capget;
 use std::time::{Duration, Instant};
@@ -234,6 +234,7 @@ struct Drone {
     scans: Vec<Scan>,
     radars: Option<Vec<RadarBlip>>,
     prev_action: Option<Action>,
+    go_up: bool,
 }
 
 impl Drone {
@@ -262,6 +263,27 @@ struct Score {
 }
 
 impl Score {
+
+    fn get_my_max_possible_sc(&self) -> i32{
+	let mut max_sc = self.my_score
+	    + (4-self.num_by_type[0])*2
+	    + (4-self.num_by_type[1])*4
+	    + (4-self.num_by_type[2])*6;
+
+	for &n_c in &self.num_by_color {
+	    if n_c == 0 {
+		max_sc += 6;
+	    }
+	}
+
+	for &n_t in &self.num_by_type {
+	    if n_t == 0 {
+		max_sc += 8;
+	    }
+	}
+
+	max_sc
+    }
 
     fn get_best_type(&self) -> Option<i32> {
 	if self.num_by_type[2] > 0 {
@@ -389,7 +411,7 @@ impl Board {
 	//merge visible fish
 	for f in &m_prev.visible_fishes.clone() {
 	   if !out_b.visible_fishes.iter().any(|fi| fi.fish_id == f.fish_id) {
-	       eprintln!("added {:?}", f);
+	      // eprintln!("added {:?}", f);
 	       out_b.visible_fishes.push(*f);
 	   }
 	}
@@ -454,8 +476,11 @@ impl Board {
 
 	// Score creation
 	let sc = Score::from_init_state(ib.my_score, ib.opp_score, &ib.my_scans, &ib.my_drones, &ib.hash_fishes);
+	
 
 	eprintln!("scor {:?}", sc);
+	eprintln!("scor {}", sc.get_my_max_possible_sc());
+	
 	
 	Board {score_mg:sc, my_scans:ib.my_scans.clone(), opp_scans: ib.opp_scans.clone(), my_drones:ib.my_drones.clone(), opp_drones:ib.opp_drones.clone(), visible_fishes:ib.visible_fishes.clone(), grid_sliced:tab_creat, predition_level:0, hash_fishes:ib.hash_fishes, game_turn:ib.game_turn}
     }
@@ -745,8 +770,12 @@ impl Board {
 	let mut res_dist = [[None;NUM_PLAY_D];NUM_PLAY_D];
 	
 	for (id_d_up,d_up) in self.my_drones.iter().enumerate() {
-	    
-	    if let Some(type_obj) = cur_score.get_best_type() {	    
+	    let mut type_obj_try = cur_score.get_best_type();
+
+	    /*if self.score_mg.get_my_max_possible_sc() > 50 && !d_up.scans.is_empty() {
+		type_obj_try = None;
+	    }*/
+	    if let Some(type_obj) = type_obj_try {	    
 		cur_score.num_by_type[type_obj as usize] -= 1;
 		//eprintln!("to take {} {}", type_obj, id_d_up);
 		for (id_d,d) in self.my_drones.iter().enumerate() {
@@ -779,6 +808,38 @@ impl Board {
 		dist_max +=  d_up.pos.y as f64;//   ::dist(&d_up.pos, & Point {x: 5000, y: 400})/10000.0;
 	    }*/
 	    
+	}
+
+
+
+	
+	if self.score_mg.get_my_max_possible_sc() > 50 && !self.my_drones[0].scans.is_empty() && !self.my_drones[1].scans.is_empty()  {
+	    res_dist[0][0] = None;
+	    res_dist[0][1] = None;
+	    
+	}
+	if self.score_mg.get_my_max_possible_sc() > 50 && !self.my_drones[0].scans.is_empty() {
+	    res_dist[1][0] = None;
+	    
+	    if let  (Some(rd1), Some(rd2)) = (res_dist[0][0], res_dist[0][1]) {
+		if rd1 < rd2 {
+		    res_dist[0][0] = Some(rd2);
+		    res_dist[0][1] = Some(rd1);
+		}
+	    }
+		
+	    
+	}
+
+	if self.score_mg.get_my_max_possible_sc() > 50 && !self.my_drones[1].scans.is_empty() {
+	    res_dist[1][1] = None;
+	    if let  (Some(rd1), Some(rd2)) = (res_dist[0][0], res_dist[0][1]) {
+		if rd1 >= rd2 {
+		    res_dist[0][0] = Some(rd2);
+		    res_dist[0][1] = Some(rd1);
+		}
+	    }
+
 	}
 
 	if let (Some(rd1), Some(rd2)) = (res_dist[0][0], res_dist[0][1]) {
@@ -1033,6 +1094,9 @@ impl Board {
 	let mut deep;
 
 	let mut num_simu = 0;
+
+
+	
 	let start = Instant::now();
 	
 	while !queue.is_empty() {
@@ -1339,7 +1403,7 @@ fn main() {
 		    initial_left = Some(drone_id);
 		}
 	    }
-	    my_drones.push(Drone {drone_id:drone_id, pos:Point{x:drone_x,y:drone_y}, emergency:emergency==1,battery:battery,scans:Vec::new(),radars:Some(Vec::new()), prev_action:prev_action[drone_id as usize]});
+	    my_drones.push(Drone {drone_id:drone_id, pos:Point{x:drone_x,y:drone_y}, emergency:emergency==1,battery:battery,scans:Vec::new(),radars:Some(Vec::new()), prev_action:prev_action[drone_id as usize],go_up:false});
         }
         let mut input_line = String::new();
         io::stdin().read_line(&mut input_line).unwrap();
@@ -1354,7 +1418,7 @@ fn main() {
             let drone_y = parse_input!(inputs[2], i32);
             let emergency = parse_input!(inputs[3], i32);
             let battery = parse_input!(inputs[4], i32);
-	    opp_drones.push(Drone {drone_id:drone_id, pos:Point{x:drone_x,y:drone_y}, emergency:emergency==1,battery:battery,scans:Vec::new(),radars:None, prev_action:None});
+	    opp_drones.push(Drone {drone_id:drone_id, pos:Point{x:drone_x,y:drone_y}, emergency:emergency==1,battery:battery,scans:Vec::new(),radars:None, prev_action:None, go_up:false});
         }
         let mut input_line = String::new();
         io::stdin().read_line(&mut input_line).unwrap();
@@ -1432,6 +1496,10 @@ fn main() {
 	
 	//let g_a = GridApprox::from_board(&board);
 	//eprintln!("{:?}", g_a);
+
+	
+
+	
 	let start = Instant::now();
 
 
