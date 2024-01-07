@@ -910,11 +910,16 @@ impl Board {
 	    let dist = GridPoint::dist(&GridPoint {x:0,y:0} ,&GridPoint {x:dx_a,y:dy_a});
 	    let (dx_n, dy_n) = ((D_GRID_MAX_DRONE as f64/dist), (D_GRID_MAX_DRONE as f64/dist));
 	    let speed_drone =  GridPoint { x:((dx_a as f64)*dx_n) as i32,y:((dy_a as f64)*dy_n) as i32};
-	    let p_new = GridPoint {x:p.x + ((dx_a as f64)*dx_n) as i32,y:p.y + ((dy_a as f64)*dy_n) as i32};
+	    let mut p_new = GridPoint {x:p.x + ((dx_a as f64)*dx_n) as i32,y:p.y + ((dy_a as f64)*dy_n) as i32};
 	  
 	    
 	    if p_new.x < 0 || p_new.x >= GRID_MAX_X as i32|| p_new.y < 0 || p_new.y >= GRID_MAX_X as i32{
-		continue;
+		p_new.x = i32::max(0, p_new.x);
+		p_new.y = i32::max(0, p_new.y);
+		
+		p_new.x = i32::min(9999, p_new.x);
+		p_new.y = i32::min(9999, p_new.y);
+			
 	    }
 
 	    if self.monster_collision(p.de_gridify(), speed_drone.de_gridify() ) {
